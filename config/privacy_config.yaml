@@ -1,0 +1,39 @@
+# Differential Privacy (Opacus DP-SGD) configuration
+# target_epsilon is the session budget used to calibrate Gaussian noise.
+# epsilon_max is a hard cap: the next optimizer step is refused once spent ε reaches it.
+differential_privacy:
+  target_epsilon: 5.0
+  epsilon_max: 8.0
+  target_delta: 1.0e-5
+  calibrate_to_target: true
+  noise_multiplier: 1.1          # used only when calibrate_to_target is false
+  max_grad_norm: 1.0
+  poisson_sampling: true
+  # Opacus secure_mode requires unmaintained torchcsprng — noise is seeded from os.urandom instead.
+
+training:
+  local_epochs: 2
+  batch_size: 64
+  learning_rate: 0.01
+
+federated:
+  # Must match server.num_rounds — used to size the RDP accountant for the whole session
+  num_rounds: 5
+
+aggregation:
+  mode: secagg
+  max_update_norm: 5.0           # L2 clip on the client update before masking
+  trim_beta: 0.2
+  num_malicious_clients: 0
+  krum_to_keep: 0
+
+client:
+  # Unique per container via CLIENT_ID env; defaults used for local tests
+  client_id: "client-default"
+  data_dir: "/data/processed"
+  num_classes: 10
+  input_dim: 784            # Flattened 28x28 synthetic/MNIST-like features
+
+logging:
+  level: "INFO"
+  json: true

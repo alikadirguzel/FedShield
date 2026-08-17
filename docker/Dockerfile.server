@@ -1,0 +1,34 @@
+# FedShield federated server image (lightweight CPU Python)
+FROM python:3.11-slim-bookworm
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    FEDSHIELD_SERVICE=server \
+    PYTHONPATH=/app
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY docker/requirements.server.txt /tmp/requirements.txt
+RUN pip install --upgrade pip \
+    && pip install -r /tmp/requirements.txt
+
+COPY config/ ./config/
+COPY src/ ./src/
+
+RUN useradd --create-home --uid 10001 fedshield \
+    && mkdir -p /certs \
+    && chown -R fedshield:fedshield /app /certs
+
+USER fedshield
+
+EXPOSE 8080
+
+HEALTHCHECK --interval=20s --timeout=5s --start-period=40s --retries=5 \
+  CMD python -c "import socket; s=socket.create_connection(('127.0.0.1',8080),2); s.close()" || exit 1
+
+CMD ["python", "-m", "src.server.federated_server"]

@@ -1,0 +1,29 @@
+# FedShield federated client image (PyTorch + Opacus)
+FROM python:3.11-slim-bookworm
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    FEDSHIELD_SERVICE=client \
+    PYTHONPATH=/app
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY docker/requirements.client.txt /tmp/requirements.txt
+RUN pip install --upgrade pip \
+    && pip install -r /tmp/requirements.txt
+
+COPY config/ ./config/
+COPY src/ ./src/
+
+RUN useradd --create-home --uid 10001 fedshield \
+    && mkdir -p /certs /data/processed \
+    && chown -R fedshield:fedshield /app /certs /data
+
+USER fedshield
+
+CMD ["python", "-m", "src.client.client_node"]

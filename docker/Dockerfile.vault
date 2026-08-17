@@ -1,0 +1,11 @@
+# Vault + init tooling for FedShield PKI bootstrap
+FROM hashicorp/vault:1.15
+
+USER root
+RUN apk add --no-cache bash curl python3 py3-pip \
+    && pip3 install --break-system-packages hvac==2.1.0 || pip3 install hvac==2.1.0
+
+COPY scripts/bootstrap_vault.py /usr/local/bin/bootstrap_vault.py
+COPY config/vault_policy.hcl /config/vault_policy.hcl
+
+ENTRYPOINT ["python3", "/usr/local/bin/bootstrap_vault.py"]

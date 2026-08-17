@@ -1,0 +1,9 @@
+# Runtime deps for the Flower server image (no Opacus, no torchvision)
+torch==2.2.2
+flwr==1.8.0
+protobuf==4.25.3
+grpcio==1.62.1
+mlflow==2.11.3
+cryptography==42.0.5
+numpy==1.26.4
+pyyaml==6.0.1

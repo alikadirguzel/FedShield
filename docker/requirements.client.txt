@@ -1,0 +1,9 @@
+# Runtime deps for federated clients (no MLflow, no Vault client)
+torch==2.2.2
+opacus==1.4.0
+flwr==1.8.0
+protobuf==4.25.3
+grpcio==1.62.1
+cryptography==42.0.5
+numpy==1.26.4
+pyyaml==6.0.1

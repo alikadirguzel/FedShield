@@ -1,0 +1,196 @@
+# FedShield — Confidential Federated Learning stack
+# Networks: control-plane (Vault/MLflow/server), fl-fabric (mTLS gRPC only)
+# Clients never join control-plane and never receive a Vault token.
+name: fedshield
+
+x-client-common: &client-common
+  build:
+    context: .
+    dockerfile: docker/Dockerfile.client
+  depends_on:
+    vault-init:
+      condition: service_completed_successfully
+    server:
+      condition: service_started
+  environment:
+    SERVER_ADDRESS: server:8080
+    PRIVACY_CONFIG: /app/config/privacy_config.yaml
+    CERT_DIR: /certs
+    DATA_DIR: /data/processed
+    FEDSHIELD_DEV_CERTS: "false"
+    PYTHONPATH: /app
+    GRPC_MAX_MESSAGE_LENGTH: "33554432"
+  networks:
+    - fl-fabric
+  restart: on-failure
+
+services:
+  vault:
+    image: hashicorp/vault:1.15
+    container_name: fedshield-vault
+    cap_add:
+      - IPC_LOCK
+    environment:
+      VAULT_DEV_ROOT_TOKEN_ID: ${VAULT_TOKEN:-fedshield-dev-root-token}
+      VAULT_DEV_LISTEN_ADDRESS: 0.0.0.0:8200
+      VAULT_ADDR: http://127.0.0.1:8200
+    networks:
+      - control-plane
+    healthcheck:
+      test: ["CMD", "vault", "status"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+
+  vault-init:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.vault
+    container_name: fedshield-vault-init
+    depends_on:
+      vault:
+        condition: service_healthy
+    environment:
+      VAULT_ADDR: http://vault:8200
+      VAULT_TOKEN: ${VAULT_TOKEN:-fedshield-dev-root-token}
+      CERT_DIR: /certs
+    volumes:
+      - certs-server:/certs/server
+      - certs-alpha:/certs/client-alpha
+      - certs-beta:/certs/client-beta
+      - certs-gamma:/certs/client-gamma
+      - ./config:/config:ro
+      - ./scripts:/scripts:ro
+    networks:
+      - control-plane
+    restart: "no"
+
+  mlflow:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.mlflow
+    container_name: fedshield-mlflow
+    environment:
+      MLFLOW_TRACKING_USERNAME: ${MLFLOW_TRACKING_USERNAME:-fedshield}
+      MLFLOW_TRACKING_PASSWORD: ${MLFLOW_TRACKING_PASSWORD:-fedshield-mlflow-change-me}
+      _MLFLOW_SERVER_FILE_STORE: sqlite:////mlflow/mlflow.db
+      _MLFLOW_SERVER_ARTIFACT_ROOT: /mlflow/artifacts
+      _MLFLOW_SERVER_SERVE_ARTIFACTS: "true"
+    ports:
+      - "5000:5000"
+    volumes:
+      - mlflow-data:/mlflow
+    networks:
+      - control-plane
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "python -c \"import os,base64,urllib.request; u=os.environ['MLFLOW_TRACKING_USERNAME']; p=os.environ['MLFLOW_TRACKING_PASSWORD']; r=urllib.request.Request('http://127.0.0.1:5000/'); r.add_header('Authorization','Basic '+base64.b64encode(f'{u}:{p}'.encode()).decode()); urllib.request.urlopen(r, timeout=4)\"",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+
+  server:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.server
+    container_name: fedshield-server
+    depends_on:
+      vault-init:
+        condition: service_completed_successfully
+      mlflow:
+        condition: service_healthy
+    environment:
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      MLFLOW_TRACKING_USERNAME: ${MLFLOW_TRACKING_USERNAME:-fedshield}
+      MLFLOW_TRACKING_PASSWORD: ${MLFLOW_TRACKING_PASSWORD:-fedshield-mlflow-change-me}
+      SERVER_CONFIG: /app/config/server_config.yaml
+      PRIVACY_CONFIG: /app/config/privacy_config.yaml
+      CERT_DIR: /certs
+      FEDSHIELD_DEV_CERTS: "false"
+      PYTHONPATH: /app
+      FEDSHIELD_SERVICE: server
+      GIT_PYTHON_REFRESH: quiet
+      GRPC_MAX_MESSAGE_LENGTH: "33554432"
+    volumes:
+      - certs-server:/certs:ro
+      - ./config:/app/config:ro
+    networks:
+      - fl-fabric
+      - control-plane
+    restart: on-failure
+
+  client-alpha:
+    <<: *client-common
+    container_name: fedshield-client-alpha
+    environment:
+      CLIENT_ID: client-alpha
+      SERVER_ADDRESS: server:8080
+      PRIVACY_CONFIG: /app/config/privacy_config.yaml
+      CERT_DIR: /certs
+      DATA_DIR: /data/processed
+      FEDSHIELD_DEV_CERTS: "false"
+      PYTHONPATH: /app
+      FEDSHIELD_SERVICE: client-alpha
+      GRPC_MAX_MESSAGE_LENGTH: "33554432"
+    volumes:
+      - certs-alpha:/certs:ro
+      - ./data/processed:/data/processed:ro
+      - ./config:/app/config:ro
+
+  client-beta:
+    <<: *client-common
+    container_name: fedshield-client-beta
+    environment:
+      CLIENT_ID: client-beta
+      SERVER_ADDRESS: server:8080
+      PRIVACY_CONFIG: /app/config/privacy_config.yaml
+      CERT_DIR: /certs
+      DATA_DIR: /data/processed
+      FEDSHIELD_DEV_CERTS: "false"
+      PYTHONPATH: /app
+      FEDSHIELD_SERVICE: client-beta
+      GRPC_MAX_MESSAGE_LENGTH: "33554432"
+    volumes:
+      - certs-beta:/certs:ro
+      - ./data/processed:/data/processed:ro
+      - ./config:/app/config:ro
+
+  client-gamma:
+    <<: *client-common
+    container_name: fedshield-client-gamma
+    environment:
+      CLIENT_ID: client-gamma
+      SERVER_ADDRESS: server:8080
+      PRIVACY_CONFIG: /app/config/privacy_config.yaml
+      CERT_DIR: /certs
+      DATA_DIR: /data/processed
+      FEDSHIELD_DEV_CERTS: "false"
+      PYTHONPATH: /app
+      FEDSHIELD_SERVICE: client-gamma
+      GRPC_MAX_MESSAGE_LENGTH: "33554432"
+    volumes:
+      - certs-gamma:/certs:ro
+      - ./data/processed:/data/processed:ro
+      - ./config:/app/config:ro
+
+networks:
+  control-plane:
+    driver: bridge
+    internal: false
+  fl-fabric:
+    driver: bridge
+    # Isolation: only model parameters traverse fl-fabric via mTLS gRPC.
+    # Raw client datasets are bind-mounted read-only and never published as ports.
+    # Flower :8080 and Vault :8200 are not published to the host.
+
+volumes:
+  certs-server:
+  certs-alpha:
+  certs-beta:
+  certs-gamma:
+  mlflow-data:
