@@ -13,7 +13,8 @@ import pytest
 
 from src.client.client_node import FedShieldClient
 from src.common.crypto import issue_dev_certificates
-from src.common.grpc_mtls import start_numpy_client_mtls
+from src.common.grpc_mtls import start_numpy_client_mtls, start_server_mtls
+from src.common.secagg import SecAggError
 from src.common.utils import get_parameters, set_parameters
 from src.models.network import create_model
 from src.server.custom_strategy import FedShieldStrategy
@@ -71,7 +72,9 @@ def test_parameter_roundtrip_serialization() -> None:
 def test_one_round_local_fit_updates_weights(privacy_cfg: dict, partitioned_data: Path) -> None:
     client = FedShieldClient("client-alpha", privacy_cfg, str(partitioned_data))
     before = get_parameters(client.trainer.model)
-    after, n, metrics = client.fit(before, {"server_round": 1, "num_rounds": 2})
+    after, n, metrics = client.fit(
+        before, {"server_round": 1, "num_rounds": 2, "aggregation_mode": "fedavg"}
+    )
     assert n > 0
     assert "epsilon" in metrics
     assert metrics["epsilon"] > 0
@@ -81,8 +84,9 @@ def test_one_round_local_fit_updates_weights(privacy_cfg: dict, partitioned_data
 def test_client_epsilon_composes_across_fit_rounds(privacy_cfg: dict, partitioned_data: Path) -> None:
     client = FedShieldClient("client-alpha", privacy_cfg, str(partitioned_data))
     params = get_parameters(client.trainer.model)
-    _, _, first = client.fit(params, {"server_round": 1, "num_rounds": 2})
-    _, _, second = client.fit(get_parameters(client.trainer.model), {"server_round": 2, "num_rounds": 2})
+    cfg = {"server_round": 1, "num_rounds": 2, "aggregation_mode": "fedavg"}
+    _, _, first = client.fit(params, cfg)
+    _, _, second = client.fit(get_parameters(client.trainer.model), {**cfg, "server_round": 2})
     assert second["epsilon"] > first["epsilon"]
 
 
@@ -184,6 +188,7 @@ def test_one_federated_round_over_mtls(tmp_path: Path, partitioned_data: Path, m
         min_available_clients=2,
         aggregation_mode="secagg",
         num_rounds=1,
+        allowed_client_ids=["client-alpha", "client-beta"],
         initial_parameters=fl.common.ndarrays_to_parameters(get_parameters(create_model())),
         inplace=False,
         accept_failures=False,
@@ -193,7 +198,7 @@ def test_one_federated_round_over_mtls(tmp_path: Path, partitioned_data: Path, m
 
     def run_server() -> None:
         try:
-            fl.server.start_server(
+            start_server_mtls(
                 server_address=f"localhost:{port}",
                 config=fl.server.ServerConfig(num_rounds=1, round_timeout=120.0),
                 strategy=strategy,
@@ -203,6 +208,7 @@ def test_one_federated_round_over_mtls(tmp_path: Path, partitioned_data: Path, m
                     server_mat.cert.read_bytes(),
                     server_mat.key.read_bytes(),
                 ),
+                allowed_client_ids=["client-alpha", "client-beta"],
             )
         except Exception as exc:  # noqa: BLE001
             errors.append(exc)
@@ -239,3 +245,18 @@ def test_one_federated_round_over_mtls(tmp_path: Path, partitioned_data: Path, m
     last = strategy.round_history[-1]
     assert last.get("secagg_aborted", 1.0) == 0.0
     assert last.get("num_fit_clients", 0.0) == 2.0
+
+
+def test_secagg_mask_failure_does_not_send_weights(privacy_cfg: dict, partitioned_data: Path) -> None:
+    client = FedShieldClient("client-alpha", privacy_cfg, str(partitioned_data))
+    params = get_parameters(client.trainer.model)
+    with pytest.raises(SecAggError, match="not in the SecAgg roster"):
+        client.fit(
+            params,
+            {
+                "server_round": 1,
+                "num_rounds": 2,
+                "aggregation_mode": "secagg",
+                "secagg_roster": "{}",
+            },
+        )

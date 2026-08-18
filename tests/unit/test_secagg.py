@@ -125,3 +125,27 @@ def test_strategy_aggregates_unmasked_fedavg() -> None:
     np.testing.assert_allclose(avg[0], 0.5 * np.ones((2, 2)), atol=1e-6)
     assert metrics["num_fit_clients"] == 2.0
     assert strategy.round_history
+
+
+def test_strategy_rejects_spoofed_client_id() -> None:
+    pub = generate_keypair().public_b64
+
+    class _Resp:
+        properties = {"client_id": "client-beta", "secagg_pub": pub}
+
+    class _Spoof:
+        cid = "client-alpha"
+
+        def get_properties(self, *args, **kwargs):
+            return _Resp()
+
+    strategy = FedShieldStrategy(
+        fraction_fit=1.0,
+        min_fit_clients=1,
+        min_available_clients=1,
+        aggregation_mode="secagg",
+        initial_parameters=ndarrays_to_parameters(get_parameters(create_model())),
+        allowed_client_ids=["client-alpha", "client-beta"],
+    )
+    roster = strategy._collect_secagg_roster([_Spoof()], server_round=1)  # type: ignore[arg-type]
+    assert roster == {}

@@ -2,7 +2,9 @@
 
 Production-shaped **federated learning** pipeline: Flower + Opacus (DP-SGD) + HashiCorp Vault PKI + pairwise SecAgg + MLflow.
 
-Raw samples never leave client containers. The network carries only **masked** model parameters (and scalar privacy metrics) over **mutual TLS**. When every selected client returns, pairwise masks cancel and the server obtains the weighted average without seeing an individual update.
+Clone this repository on any machine. There are no personal tokens, home-directory paths, or machine-specific secrets in the tree. Local credentials live only in a gitignored `.env`.
+
+Raw samples never leave client containers. The network carries only **masked** model parameters (and scalar privacy metrics) over **mutual TLS**. Flower client identities are the **verified certificate Common Name**.
 
 ## What this guarantees — and what it does not
 
@@ -14,96 +16,99 @@ Raw samples never leave client containers. The network carries only **masked** m
 | (ε, δ)-DP on local training | Session-scoped RDP accountant; noise calibrated to `target_epsilon` |
 | Hard privacy stop | Next DP step is refused once spent ε ≥ `epsilon_max` |
 | Poisoning magnitude bound | Client L2 update clip before masking |
-| Identity isolation | Per-client cert volumes; no Vault token on FL nodes |
+| Identity isolation | Per-client cert + data volumes; `cid` = cert CN; allowlisted ids |
 
-This is **not** a TEE / confidential-computing enclave, and it is **not** malicious-client consensus. Byzantine-robust aggregators (`trimmed_mean`, `krum`) are available but **incompatible with SecAgg** because they need plaintext individual updates — pick one threat model in config.
+This is **not** a TEE / confidential-computing enclave, and it is **not** malicious-client consensus. Byzantine-robust aggregators (`trimmed_mean`, `krum`) are available but **incompatible with SecAgg**.
 
-Opacus `secure_mode` is off: `torchcsprng` is unmaintained. Noise generators are re-seeded from `os.urandom` each round.
+Opacus `secure_mode` is off: `torchcsprng` is unmaintained. Noise is seeded from `os.urandom` each round.
 
 ## Architecture
 
 ```
-Vault (PKI, control-plane only)
-        │  vault-init writes per-identity volumes, then exits
+Vault (file storage + init/unseal, pki-plane only)
+        │  vault-init writes per-identity cert volumes, then exits
         ▼
 Flower Server :8080  ──mTLS──  Client-Alpha / Beta / Gamma
-        │                         (local Non-IID data + Opacus)
+        │                         (volume-private data + Opacus)
         ▼
      MLflow :5000  (basic auth, control-plane)
 ```
 
-Clients attach **only** to `fl-fabric`. They cannot reach Vault.
+Clients attach **only** to `fl-fabric` (internal). They cannot reach Vault or MLflow. Each client mounts **only** its own data volume (`x.npy` / `y.npy`).
 
 ## Quick start
 
-### Windows (PowerShell)
-
-```powershell
-Copy-Item .env.example .env   # set MLFLOW_TRACKING_PASSWORD
-.\dev.ps1 install
-.\dev.ps1 data
-.\dev.ps1 test
-.\dev.ps1 up
-```
-
-### Linux / macOS (Make)
+Requires Docker. Python 3.11 is optional (needed only for local pytest).
 
 ```bash
-cp .env.example .env
-python -m venv .venv
-source .venv/bin/activate
-make install
-make data
-make test
-make up
+git clone https://github.com/<you>/FedShield.git
+cd FedShield
+python scripts/init_env.py          # writes gitignored .env with a random password
+docker compose up -d --build
 ```
 
-- MLflow UI: http://localhost:5000 (basic auth from `.env`)
-- Vault and the Flower gRPC port are **not** published to the host
+Windows (PowerShell): `python scripts/init_env.py` then `.\dev.ps1 up`.
+
+- MLflow: http://127.0.0.1:5000 — username `fedshield`, password in `.env`
+- Vault and Flower gRPC are **not** published to the host
+- Data partitions are generated inside the `data-init` container (no host `data/` required)
 
 ```bash
-make logs    # follow containers
-make down    # tear down + volumes
+docker compose logs -f
+docker compose down -v              # stop + delete volumes
 ```
+
+### Public / VPS bind
+
+Default MLflow bind is loopback. To listen on all interfaces:
+
+```bash
+# in .env
+MLFLOW_BIND=0.0.0.0
+MLFLOW_PORT=5000
+```
+
+Then `docker compose up -d`. Put TLS (Caddy/nginx) in front of port 5000 before exposing it to the internet.
 
 ### Local tests without Vault
 
 ```bash
-set FEDSHIELD_DEV_CERTS=true   # PowerShell: $env:FEDSHIELD_DEV_CERTS="true"
+export FEDSHIELD_DEV_CERTS=true     # PowerShell: $env:FEDSHIELD_DEV_CERTS="true"
+python -m venv .venv
+# Windows: .\.venv\Scripts\activate
+# Unix:    source .venv/bin/activate
+pip install -r requirements.txt
 pytest tests -q
 ```
 
-Dev certificates are for unit/integration tests only — never for production.
+Dev certificates are for unit/integration tests only.
 
 ## Project layout
 
 ```
-config/           server, privacy, Vault policy
+config/           server, privacy, Vault policy + server HCL
 src/common/       crypto, mTLS, SecAgg, logging, utils
 src/models/       LayerNorm MLP (BatchNorm forbidden for DP-SGD)
 src/client/       NumPyClient, session DP trainer, Non-IID loader
 src/server/       Flower server, SecAgg/robust strategy, MLflow
-docker/           server / client / vault-init / mlflow images
+docker/           server / client / data-init / vault / mlflow images
 tests/            unit + integration (including a live mTLS round)
-scripts/          Non-IID data generator, Vault PKI bootstrap
+scripts/          env bootstrap, Non-IID generator, Vault PKI bootstrap
 ```
 
 ## Configuration
 
-- `config/server_config.yaml` — rounds, `round_timeout`, min clients, aggregation mode, gRPC size, MLflow
-- `config/privacy_config.yaml` — `target_epsilon` / `epsilon_max` / δ, session `num_rounds`, update clip
+- `config/server_config.yaml` — rounds, timeout, min clients, aggregation, gRPC, allowlist
+- `config/privacy_config.yaml` — `target_epsilon` / `epsilon_max` / δ, session rounds, update clip
 
-`target_epsilon` sizes Gaussian noise for the **whole federated session** (`local_epochs × batches × num_rounds`). `epsilon_max` is a hard cap above that. Spent ε is tracked on one RDP accountant for the client process lifetime.
+`target_epsilon` sizes Gaussian noise for the **whole federated session**. `epsilon_max` is a hard cap.
 
-Aggregation modes:
-
-- `secagg` (default) — pairwise masks; abort on dropout
-- `trimmed_mean` / `krum` / `fedavg` — unmasked; use when you need robust aggregation more than hiding individual updates
+Aggregation modes: `secagg` (default), `trimmed_mean`, `krum`, `fedavg`.
 
 ## CI
 
-GitHub Actions (`.github/workflows/ci-cd.yml`): ruff → unit/integration tests → Docker image builds → `docker compose config`.
+GitHub Actions: ruff → tests → Docker image builds → `docker compose config`.
 
 ## License
 
-Proprietary / internal — adjust as needed for your organization.
+MIT — see `LICENSE`.

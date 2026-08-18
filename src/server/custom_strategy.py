@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from typing import Dict, List, Optional, Set, Tuple, Union
+from typing import Dict, List, Optional, Sequence, Set, Tuple, Union
 
 import flwr as fl
 from flwr.common import FitIns, FitRes, GetPropertiesIns, Metrics, Parameters, Scalar, ndarrays_to_parameters, parameters_to_ndarrays
@@ -61,6 +61,7 @@ class FedShieldStrategy(fl.server.strategy.FedAvg):
         krum_to_keep: int = 0,
         num_rounds: int = 5,
         property_timeout: float = 15.0,
+        allowed_client_ids: Optional[Sequence[str]] = None,
         **kwargs,
     ) -> None:
         kwargs.setdefault("inplace", False)
@@ -73,6 +74,7 @@ class FedShieldStrategy(fl.server.strategy.FedAvg):
         self.krum_to_keep = int(krum_to_keep)
         self.num_rounds = int(num_rounds)
         self.property_timeout = float(property_timeout)
+        self.allowed_client_ids = {str(cid) for cid in (allowed_client_ids or []) if str(cid)}
         self.round_history: List[Dict[str, float]] = []
         self._round_roster: Dict[int, Set[str]] = {}
 
@@ -95,10 +97,20 @@ class FedShieldStrategy(fl.server.strategy.FedAvg):
             roster = self._collect_secagg_roster(clients, server_round)
             config["secagg_roster"] = json.dumps(roster, separators=(",", ":"), sort_keys=True)
             self._round_roster[server_round] = set(roster.keys())
-            logger.info(
-                "SecAgg roster published",
-                extra={"round": server_round, "n_clients": len(roster)},
-            )
+            if len(roster) != len(clients):
+                logger.error(
+                    "SecAgg roster incomplete — round will abort at aggregation",
+                    extra={
+                        "round": server_round,
+                        "sampled": len(clients),
+                        "rostered": len(roster),
+                    },
+                )
+            else:
+                logger.info(
+                    "SecAgg roster published",
+                    extra={"round": server_round, "n_clients": len(roster)},
+                )
 
         fit_ins = FitIns(parameters, config)
         return [(client, fit_ins) for client in clients]
@@ -107,6 +119,7 @@ class FedShieldStrategy(fl.server.strategy.FedAvg):
         self, clients: List[ClientProxy], server_round: int
     ) -> Dict[str, str]:
         roster: Dict[str, str] = {}
+        duplicates: Set[str] = set()
         for client in clients:
             try:
                 response = client.get_properties(
@@ -115,20 +128,42 @@ class FedShieldStrategy(fl.server.strategy.FedAvg):
                     group_id=server_round,
                 )
                 properties = dict(response.properties or {})
-                client_id = str(properties.get("client_id") or client.cid)
+                claimed_id = str(properties.get("client_id") or "")
+                cert_id = str(client.cid)
                 public_key = str(properties.get("secagg_pub") or "")
-                if not public_key:
+                if not claimed_id or not public_key:
                     logger.warning(
-                        "Client omitted SecAgg public key",
-                        extra={"proxy_cid": client.cid, "client_id": client_id},
+                        "Client omitted SecAgg identity or public key",
+                        extra={"proxy_cid": client.cid, "client_id": claimed_id},
                     )
                     continue
-                roster[client_id] = public_key
+                if claimed_id != cert_id:
+                    logger.warning(
+                        "Rejecting spoofed client_id (does not match certificate identity)",
+                        extra={"proxy_cid": cert_id, "claimed_id": claimed_id},
+                    )
+                    continue
+                if self.allowed_client_ids and claimed_id not in self.allowed_client_ids:
+                    logger.warning(
+                        "Rejecting client_id outside allowlist",
+                        extra={"client_id": claimed_id},
+                    )
+                    continue
+                if claimed_id in roster:
+                    logger.error(
+                        "Duplicate client_id in SecAgg roster",
+                        extra={"client_id": claimed_id},
+                    )
+                    duplicates.add(claimed_id)
+                    continue
+                roster[claimed_id] = public_key
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
                     "Failed to fetch SecAgg properties",
                     extra={"proxy_cid": client.cid, "error": str(exc)},
                 )
+        for dup in duplicates:
+            roster.pop(dup, None)
         return roster
 
     def _secagg_ready(

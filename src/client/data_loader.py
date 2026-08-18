@@ -38,15 +38,21 @@ def load_client_partition(
 ) -> Tuple[Dataset, Dataset]:
     """Load Non-IID partition for client_id from processed data directory.
 
-    Expected files: `{data_dir}/{client_id}_x.npy`, `{client_id}_y.npy`
+    Expected files (first match wins):
+    ``{data_dir}/x.npy`` + ``y.npy`` (isolated volume), or
+    ``{data_dir}/{client_id}_x.npy`` + ``{client_id}_y.npy``.
     """
     root = Path(data_dir)
-    x_path = root / f"{client_id}_x.npy"
-    y_path = root / f"{client_id}_y.npy"
-    if not x_path.exists() or not y_path.exists():
+    isolated = (root / "x.npy", root / "y.npy")
+    named = (root / f"{client_id}_x.npy", root / f"{client_id}_y.npy")
+    if isolated[0].exists() and isolated[1].exists():
+        x_path, y_path = isolated
+    elif named[0].exists() and named[1].exists():
+        x_path, y_path = named
+    else:
         raise FileNotFoundError(
             f"Missing partition for {client_id} under {root}. "
-            "Run scripts/generate_non_iid_data.py first."
+            "Run scripts/generate_non_iid_data.py or start the data-init container."
         )
 
     features = np.load(x_path)

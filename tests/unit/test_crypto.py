@@ -9,12 +9,18 @@ import pytest
 
 from src.common.crypto import (
     CertificateError,
+    certificate_common_name,
     issue_dev_certificates,
     validate_certificate,
     flower_ssl_paths,
     build_ssl_context,
 )
-from src.common.grpc_mtls import _mtls_create_channel, build_client_channel_credentials
+from src.common.grpc_mtls import (
+    _mtls_create_channel,
+    build_client_channel_credentials,
+    force_client_auth_ssl_server_credentials,
+    peer_certificate_cn,
+)
 
 
 def test_dev_certificate_issue_and_validate(tmp_path: Path) -> None:
@@ -52,6 +58,37 @@ def test_plaintext_channel_rejected(tmp_path: Path) -> None:
     factory = _mtls_create_channel(build_client_channel_credentials(material), 1024)
     with pytest.raises(RuntimeError, match="Plaintext"):
         factory("127.0.0.1:1", insecure=True)
+
+
+def test_certificate_common_name_matches_issue(tmp_path: Path) -> None:
+    material = issue_dev_certificates(tmp_path, common_name="client-alpha", role="client")
+    assert certificate_common_name(material.cert) == "client-alpha"
+
+
+def test_server_credentials_wrapper_requires_client_auth() -> None:
+    captured: dict = {}
+
+    def fake(*args, **kwargs):
+        captured.update(kwargs)
+        return "creds"
+
+    wrapped = force_client_auth_ssl_server_credentials(fake)
+    result = wrapped([("k", "c")], root_certificates=b"ca", require_client_auth=False)
+    assert result == "creds"
+    assert captured["require_client_auth"] is True
+
+
+class _AuthContext:
+    def __init__(self, auth: dict) -> None:
+        self._auth = auth
+
+    def auth_context(self) -> dict:
+        return self._auth
+
+
+def test_peer_certificate_cn_from_auth_context() -> None:
+    ctx = _AuthContext({"x509_common_name": [b"client-alpha"]})
+    assert peer_certificate_cn(ctx) == "client-alpha"  # type: ignore[arg-type]
 
 
 @pytest.mark.skipif(

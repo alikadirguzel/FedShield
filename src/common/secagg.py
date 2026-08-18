@@ -31,7 +31,7 @@ from src.common.logger import setup_logger
 
 logger = setup_logger("fedshield.secagg")
 
-_INFO = b"fedshield-secagg-v1"
+_INFO = b"fedshield-secagg-v2"
 
 
 class SecAggError(RuntimeError):
@@ -93,11 +93,19 @@ def _shared_secret(private: X25519PrivateKey, peer_public_raw: bytes) -> bytes:
 
 
 def _prf_layer(secret: bytes, round_idx: int, layer: int, shape: Sequence[int]) -> np.ndarray:
-    info = _INFO + round_idx.to_bytes(4, "big") + layer.to_bytes(4, "big")
-    digest = hmac.new(secret, info, hashlib.sha256).digest()
-    seed = np.frombuffer(digest, dtype=np.uint32).tolist()
-    rng = np.random.default_rng(np.random.SeedSequence(seed))
-    return rng.standard_normal(size=tuple(shape), dtype=np.float32)
+    """HMAC-SHA256 counter PRF → float32 tensor in (-1, 1). Deterministic and NaN-free."""
+    n_elem = int(np.prod(shape)) if shape else 1
+    n_bytes = n_elem * 4
+    prefix = _INFO + int(round_idx).to_bytes(4, "big") + int(layer).to_bytes(4, "big")
+    buf = bytearray()
+    counter = 0
+    while len(buf) < n_bytes:
+        buf.extend(hmac.new(secret, prefix + counter.to_bytes(4, "big"), hashlib.sha256).digest())
+        counter += 1
+    unsigned = np.frombuffer(bytes(buf[:n_bytes]), dtype=np.uint32)
+    centered = (unsigned.astype(np.float64) + 0.5) / np.float64(2**32)
+    signed = (centered * 2.0 - 1.0).astype(np.float32)
+    return signed.reshape(tuple(int(d) for d in shape) if shape else ())
 
 
 def pairwise_masks(

@@ -13,7 +13,7 @@ import numpy as np
 from src.client.data_loader import load_client_partition, make_dataloader
 from src.client.dp_trainer import DPTrainConfig, DPTrainer
 from src.common.config import apply_logging_config, load_yaml
-from src.common.crypto import provision_certificates
+from src.common.crypto import CertificateError, certificate_common_name, provision_certificates
 from src.common.grpc_mtls import start_numpy_client_mtls
 from src.common.logger import setup_logger
 from src.common.secagg import (
@@ -90,29 +90,25 @@ class FedShieldClient(fl.client.NumPyClient):
         metrics: Dict,
     ) -> List[np.ndarray]:
         mode = str(config.get("aggregation_mode", "secagg"))
+        if mode != "secagg":
+            metrics["secagg_applied"] = False
+            return weights
         roster_raw = config.get("secagg_roster", "")
-        if mode != "secagg" or not roster_raw:
-            metrics["secagg_applied"] = False
-            return weights
-        try:
-            roster = decode_roster(str(roster_raw))
-            round_idx = int(config.get("server_round", 0))
-            masks = pairwise_masks(
-                client_id=self.client_id,
-                keypair=self.secagg_keypair,
-                roster=roster,
-                round_idx=round_idx,
-                shapes=[tuple(w.shape) for w in weights],
-                num_examples=num_examples,
-            )
-            metrics["secagg_applied"] = True
-            metrics["secagg_peers"] = int(max(len(roster) - 1, 0))
-            return mask_weights(weights, masks)
-        except SecAggError as exc:
-            logger.error("SecAgg masking failed", extra={"error": str(exc), "client_id": self.client_id})
-            metrics["secagg_applied"] = False
-            metrics["secagg_error"] = str(exc)[:200]
-            return weights
+        if not roster_raw:
+            raise SecAggError("SecAgg roster missing from server config")
+        roster = decode_roster(str(roster_raw))
+        round_idx = int(config.get("server_round", 0))
+        masks = pairwise_masks(
+            client_id=self.client_id,
+            keypair=self.secagg_keypair,
+            roster=roster,
+            round_idx=round_idx,
+            shapes=[tuple(w.shape) for w in weights],
+            num_examples=num_examples,
+        )
+        metrics["secagg_applied"] = True
+        metrics["secagg_peers"] = int(max(len(roster) - 1, 0))
+        return mask_weights(weights, masks)
 
     def fit(
         self, parameters: List[np.ndarray], config: Dict
@@ -141,7 +137,14 @@ class FedShieldClient(fl.client.NumPyClient):
             "steps_taken": int(result.steps_taken),
             "epsilon_cap_hit": bool(result.reason == "epsilon_cap_exceeded"),
         }
-        outbound = self._maybe_mask(clipped, config, len(self.train_ds), metrics)
+        try:
+            outbound = self._maybe_mask(clipped, config, len(self.train_ds), metrics)
+        except SecAggError as exc:
+            logger.error(
+                "SecAgg masking failed — refusing to send unmasked weights",
+                extra={"error": str(exc), "client_id": self.client_id},
+            )
+            raise
         return outbound, len(self.train_ds), metrics
 
     def evaluate(
@@ -192,6 +195,11 @@ def main() -> None:
         common_name=args.client_id,
         cert_dir=Path(args.cert_dir),
     )
+    cert_cn = certificate_common_name(material.cert)
+    if cert_cn != args.client_id:
+        raise CertificateError(
+            f"CLIENT_ID '{args.client_id}' does not match certificate CN '{cert_cn}'"
+        )
 
     client = FedShieldClient(
         client_id=args.client_id,

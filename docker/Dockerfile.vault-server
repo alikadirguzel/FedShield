@@ -1,0 +1,8 @@
+FROM hashicorp/vault:1.15
+
+USER root
+COPY config/vault.hcl /vault/config/vault.hcl
+RUN chown vault:vault /vault/config/vault.hcl
+USER vault
+
+CMD ["server", "-config=/vault/config/vault.hcl"]

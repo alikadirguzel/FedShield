@@ -10,7 +10,7 @@
 
 param(
     [Parameter(Position = 0)]
-    [ValidateSet("help", "install", "lint", "test", "test-unit", "test-integration", "data", "build", "up", "start", "down", "logs", "health", "e2e", "clean")]
+    [ValidateSet("help", "install", "lint", "test", "test-unit", "test-integration", "data", "init-env", "build", "up", "start", "down", "logs", "health", "e2e", "clean")]
     [string]$Command = "help"
 )
 
@@ -46,6 +46,12 @@ function Invoke-Install {
     python -m venv .venv
     & .\.venv\Scripts\python.exe -m pip install --upgrade pip
     & .\.venv\Scripts\pip.exe install -r requirements.txt
+}
+
+function Invoke-InitEnv {
+    $py = Get-Python
+    & $py scripts\init_env.py
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }
 
 function Invoke-Data {
@@ -84,7 +90,7 @@ function Invoke-Build {
 
 function Invoke-Up {
     Assert-Docker
-    Invoke-Data
+    Invoke-InitEnv
     docker compose up -d --build
     if ($LASTEXITCODE -ne 0) {
         Write-Host "docker compose up failed." -ForegroundColor Red
@@ -93,14 +99,14 @@ function Invoke-Up {
     Write-Host ""
     Write-Host "Stack starting. Check status with:  docker compose ps" -ForegroundColor Green
     Write-Host "MLflow UI: http://localhost:5000"
-    Write-Host "Vault:     http://localhost:8200"
+    Write-Host "Vault is internal (not published to the host)"
     Write-Host "Logs:      .\dev.ps1 logs"
     Write-Host "Next time (fast):  .\dev.ps1 start"
 }
 
 function Invoke-Start {
-    # Fast restart: no rebuild, no data regen — use after first successful .\dev.ps1 up
     Assert-Docker
+    Invoke-InitEnv
     docker compose up -d
     if ($LASTEXITCODE -ne 0) {
         Write-Host "docker compose start failed. If images are missing, run: .\dev.ps1 up" -ForegroundColor Red
@@ -122,7 +128,7 @@ function Invoke-Logs {
 
 function Invoke-E2E {
     Assert-Docker
-    Invoke-Data
+    Invoke-InitEnv
     Invoke-Build
     docker compose up --abort-on-container-exit --exit-code-from server
     docker compose ps
@@ -235,17 +241,18 @@ function Invoke-Health {
 function Show-Help {
     @"
 FedShield targets (PowerShell):
-  .\dev.ps1 install            Create venv + install deps (once)
+  .\dev.ps1 init-env           Create gitignored .env (random MLflow password)
   .\dev.ps1 up                 First run / after code changes (build)
   .\dev.ps1 start              Daily restart (fast, no rebuild)
   .\dev.ps1 health             Verify stack is really working
   .\dev.ps1 down               Stop stack + volumes
   .\dev.ps1 logs               Tail compose logs
+  .\dev.ps1 init-env           Create gitignored .env (random MLflow password)
   .\dev.ps1 test               Unit + integration tests
-  .\dev.ps1 data               Generate Non-IID partitions
+  .\dev.ps1 data               Generate Non-IID partitions (local pytest)
   .\dev.ps1 build              Build docker images only
   .\dev.ps1 lint               Run ruff
-  .\dev.ps1 e2e                data + build + foreground compose
+  .\dev.ps1 e2e                init-env + build + foreground compose
   .\dev.ps1 clean              Remove caches
 "@
 }
@@ -258,6 +265,7 @@ switch ($Command) {
     "test-unit" { Invoke-TestUnit }
     "test-integration" { Invoke-TestIntegration }
     "data" { Invoke-Data }
+    "init-env" { Invoke-InitEnv }
     "build" { Invoke-Build }
     "up" { Invoke-Up }
     "start" { Invoke-Start }

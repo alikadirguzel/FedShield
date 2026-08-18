@@ -253,6 +253,16 @@ def provision_certificates(
     return fetch_vault_certificate(role=role, common_name=common_name, cert_dir=target)
 
 
+def certificate_common_name(cert_path: Path) -> str:
+    """Return the leaf certificate Common Name (used as the mTLS identity)."""
+    cert = x509.load_pem_x509_certificate(cert_path.read_bytes())
+    attrs = cert.subject.get_attributes_for_oid(NameOID.COMMON_NAME)
+    if not attrs:
+        raise CertificateError(f"Certificate {cert_path} has no Common Name")
+    value = attrs[0].value
+    return value.decode("utf-8") if isinstance(value, bytes) else str(value)
+
+
 def validate_certificate(cert_path: Path, ca_path: Path) -> x509.Certificate:
     """Validate that cert_path is signed by ca_path and currently valid."""
     cert = x509.load_pem_x509_certificate(cert_path.read_bytes())

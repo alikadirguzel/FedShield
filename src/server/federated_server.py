@@ -10,7 +10,7 @@ import flwr as fl
 
 from src.common.config import apply_logging_config, load_yaml
 from src.common.crypto import provision_certificates
-from src.common.grpc_mtls import DEFAULT_MAX_MESSAGE_LENGTH
+from src.common.grpc_mtls import DEFAULT_MAX_MESSAGE_LENGTH, start_server_mtls
 from src.common.logger import setup_logger
 from src.common.utils import get_parameters
 from src.models.network import create_model
@@ -70,6 +70,8 @@ def main() -> None:
     input_dim = int(client_cfg.get("input_dim", 784))
     num_classes = int(client_cfg.get("num_classes", 10))
 
+    allowed_ids = [str(cid) for cid in srv.get("allowed_client_ids") or []]
+
     material = provision_certificates(
         role="server",
         common_name="server",
@@ -114,6 +116,7 @@ def main() -> None:
         num_malicious_clients=int(agg_cfg.get("num_malicious_clients", 0)),
         krum_to_keep=int(agg_cfg.get("krum_to_keep", 0)),
         num_rounds=num_rounds,
+        allowed_client_ids=allowed_ids,
         inplace=False,
         accept_failures=str(agg_cfg.get("mode", "secagg")) != "secagg",
     )
@@ -127,17 +130,19 @@ def main() -> None:
             "min_available_clients": min_available,
             "aggregation_mode": strategy.aggregation_mode,
             "grpc_max_message_length": grpc_max_message,
+            "allowed_client_ids": allowed_ids,
         },
     )
 
     timeout = float(round_timeout) if round_timeout is not None else None
     try:
-        fl.server.start_server(
+        start_server_mtls(
             server_address=address,
             config=fl.server.ServerConfig(num_rounds=num_rounds, round_timeout=timeout),
             strategy=strategy,
-            grpc_max_message_length=grpc_max_message,
             certificates=(ca_bytes, cert_bytes, key_bytes),
+            grpc_max_message_length=grpc_max_message,
+            allowed_client_ids=allowed_ids,
         )
     finally:
         tracker.end_run()

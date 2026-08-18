@@ -6,6 +6,7 @@ Uses Vault HTTP API via hvac adapter for compatibility across Vault 1.15 / hvac 
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 import time
@@ -15,16 +16,72 @@ import hvac
 
 
 def wait_for_vault(client: hvac.Client, timeout: int = 120) -> None:
+    """Block until the Vault HTTP API answers (sealed or unsealed)."""
     start = time.time()
     while time.time() - start < timeout:
         try:
-            if client.sys.is_initialized() and not client.sys.is_sealed():
-                if client.is_authenticated():
-                    return
+            client.sys.is_initialized()
+            return
         except Exception:  # noqa: BLE001
             pass
         time.sleep(2)
     raise RuntimeError("Vault did not become ready")
+
+
+def _keys_path(init_dir: Path) -> Path:
+    return init_dir / "vault-keys.json"
+
+
+def initialize_and_unseal(client: hvac.Client, init_dir: Path) -> str:
+    """Initialize (once), persist unseal material, unseal, return root token.
+
+    Unseal keys stay on the vault-init volume only — never on FL nodes.
+    """
+    init_dir.mkdir(parents=True, exist_ok=True)
+    keys_file = _keys_path(init_dir)
+    initialized = False
+    try:
+        initialized = bool(client.sys.is_initialized())
+    except Exception:  # noqa: BLE001
+        status = _as_data(client.adapter.get("/v1/sys/init"))
+        initialized = bool(status.get("initialized"))
+
+    if not initialized:
+        print("[vault-init] Initializing Vault (file storage, 1/1 shares)", flush=True)
+        result = client.sys.initialize(secret_shares=1, secret_threshold=1)
+        data = _as_data(result)
+        if "keys" not in data or "root_token" not in data:
+            raise RuntimeError(f"Unexpected Vault init payload keys={list(data)}")
+        payload = {
+            "keys": list(data["keys"]),
+            "root_token": data["root_token"],
+        }
+        keys_file.write_text(json.dumps(payload), encoding="utf-8")
+        try:
+            keys_file.chmod(0o600)
+        except OSError:
+            pass
+    else:
+        if not keys_file.exists():
+            raise RuntimeError(
+                "Vault is already initialized but vault-keys.json is missing. "
+                "Run: docker compose down -v && rebuild."
+            )
+        payload = json.loads(keys_file.read_text(encoding="utf-8"))
+
+    seal = client.sys.read_seal_status()
+    sealed = bool(seal.get("sealed") if isinstance(seal, dict) else client.sys.is_sealed())
+    if sealed:
+        print("[vault-init] Unsealing Vault", flush=True)
+        client.sys.submit_unseal_keys(payload["keys"])
+    if client.sys.is_sealed():
+        raise RuntimeError("Failed to unseal Vault")
+
+    token = str(payload["root_token"])
+    client.token = token
+    if not client.is_authenticated():
+        raise RuntimeError("Vault root token rejected after unseal")
+    return token
 
 
 def ensure_mount(client: hvac.Client, path: str, max_lease_ttl: str) -> None:
@@ -231,13 +288,14 @@ def issue_certificate(
 
 def main() -> int:
     addr = os.getenv("VAULT_ADDR", "http://vault:8200")
-    token = os.getenv("VAULT_TOKEN", "fedshield-dev-root-token")
+    init_dir = Path(os.getenv("VAULT_INIT_DIR", "/vault-init"))
     cert_dir = Path(os.getenv("CERT_DIR", "/certs"))
     policy_path = Path(os.getenv("VAULT_POLICY_PATH", "/config/vault_policy.hcl"))
 
-    client = hvac.Client(url=addr, token=token)
+    client = hvac.Client(url=addr)
     print(f"[vault-init] Waiting for Vault at {addr}", flush=True)
     wait_for_vault(client)
+    initialize_and_unseal(client, init_dir)
 
     print("[vault-init] Enabling PKI engines", flush=True)
     ensure_mount(client, "pki", "87600h")

@@ -1,17 +1,21 @@
-.PHONY: help install lint test test-unit test-integration data build up down logs clean e2e
+.PHONY: help install lint test test-unit test-integration data init-env build up down logs clean e2e
 
 help:
 	@echo "FedShield targets:"
+	@echo "  init-env          Create gitignored .env with a random MLflow password"
 	@echo "  install           Install Python dependencies"
 	@echo "  lint              Run ruff linter"
 	@echo "  test              Run unit + integration tests"
-	@echo "  data              Generate Non-IID synthetic partitions"
+	@echo "  data              Generate Non-IID synthetic partitions (local pytest)"
 	@echo "  build             Build docker images"
-	@echo "  up                Start full stack (docker compose)"
+	@echo "  up                Create .env if needed and start the stack"
 	@echo "  down              Stop stack"
 	@echo "  logs              Tail compose logs"
-	@echo "  e2e               data + build + up (end-to-end)"
+	@echo "  e2e               init-env + build + foreground compose"
 	@echo "  clean             Remove caches and generated artifacts"
+
+init-env:
+	python scripts/init_env.py
 
 install:
 	python -m pip install --upgrade pip
@@ -34,7 +38,7 @@ data:
 build:
 	docker compose build
 
-up: data
+up: init-env
 	docker compose up -d --build
 
 down:
@@ -43,10 +47,8 @@ down:
 logs:
 	docker compose logs -f --tail=200
 
-e2e: data build
-	docker compose up --abort-on-container-exit --exit-code-from server || true
-	docker compose ps
-	@echo "MLflow UI: http://localhost:5000"
+e2e: init-env build
+	docker compose up --abort-on-container-exit --exit-code-from server
 
 clean:
 	rm -rf __pycache__ .pytest_cache .ruff_cache htmlcov mlruns

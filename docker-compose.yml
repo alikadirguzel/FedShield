@@ -1,6 +1,11 @@
-# FedShield — Confidential Federated Learning stack
-# Networks: control-plane (Vault/MLflow/server), fl-fabric (mTLS gRPC only)
-# Clients never join control-plane and never receive a Vault token.
+# FedShield — portable Compose stack (no host home paths, no baked-in secrets)
+#
+# Networks:
+#   pki-plane     — Vault + vault-init only (internal)
+#   control-plane — MLflow + Flower server
+#   fl-fabric     — Flower server + clients, mTLS gRPC only (internal)
+#
+# Required: copy .env.example → .env (scripts/init_env.py) and set a password.
 name: fedshield
 
 x-client-common: &client-common
@@ -8,6 +13,8 @@ x-client-common: &client-common
     context: .
     dockerfile: docker/Dockerfile.client
   depends_on:
+    data-init:
+      condition: service_completed_successfully
     vault-init:
       condition: service_completed_successfully
     server:
@@ -25,23 +32,39 @@ x-client-common: &client-common
   restart: on-failure
 
 services:
+  data-init:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.data
+    container_name: fedshield-data-init
+    environment:
+      PYTHONUNBUFFERED: "1"
+    volumes:
+      - data-alpha:/out/client-alpha
+      - data-beta:/out/client-beta
+      - data-gamma:/out/client-gamma
+    command: ["--isolated-root", "/out"]
+    restart: "no"
+
   vault:
-    image: hashicorp/vault:1.15
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.vault-server
     container_name: fedshield-vault
     cap_add:
       - IPC_LOCK
     environment:
-      VAULT_DEV_ROOT_TOKEN_ID: ${VAULT_TOKEN:-fedshield-dev-root-token}
-      VAULT_DEV_LISTEN_ADDRESS: 0.0.0.0:8200
       VAULT_ADDR: http://127.0.0.1:8200
+    volumes:
+      - vault-data:/vault/file
     networks:
-      - control-plane
+      - pki-plane
     healthcheck:
       test: ["CMD", "vault", "status"]
       interval: 5s
       timeout: 3s
-      retries: 20
-      start_period: 5s
+      retries: 30
+      start_period: 8s
 
   vault-init:
     build:
@@ -50,20 +73,19 @@ services:
     container_name: fedshield-vault-init
     depends_on:
       vault:
-        condition: service_healthy
+        condition: service_started
     environment:
       VAULT_ADDR: http://vault:8200
-      VAULT_TOKEN: ${VAULT_TOKEN:-fedshield-dev-root-token}
+      VAULT_INIT_DIR: /vault-init
       CERT_DIR: /certs
     volumes:
+      - vault-init-keys:/vault-init
       - certs-server:/certs/server
       - certs-alpha:/certs/client-alpha
       - certs-beta:/certs/client-beta
       - certs-gamma:/certs/client-gamma
-      - ./config:/config:ro
-      - ./scripts:/scripts:ro
     networks:
-      - control-plane
+      - pki-plane
     restart: "no"
 
   mlflow:
@@ -73,12 +95,12 @@ services:
     container_name: fedshield-mlflow
     environment:
       MLFLOW_TRACKING_USERNAME: ${MLFLOW_TRACKING_USERNAME:-fedshield}
-      MLFLOW_TRACKING_PASSWORD: ${MLFLOW_TRACKING_PASSWORD:-fedshield-mlflow-change-me}
+      MLFLOW_TRACKING_PASSWORD: "${MLFLOW_TRACKING_PASSWORD:?Set MLFLOW_TRACKING_PASSWORD in .env}"
       _MLFLOW_SERVER_FILE_STORE: sqlite:////mlflow/mlflow.db
       _MLFLOW_SERVER_ARTIFACT_ROOT: /mlflow/artifacts
       _MLFLOW_SERVER_SERVE_ARTIFACTS: "true"
     ports:
-      - "5000:5000"
+      - "${MLFLOW_BIND:-127.0.0.1}:${MLFLOW_PORT:-5000}:5000"
     volumes:
       - mlflow-data:/mlflow
     networks:
@@ -107,7 +129,7 @@ services:
     environment:
       MLFLOW_TRACKING_URI: http://mlflow:5000
       MLFLOW_TRACKING_USERNAME: ${MLFLOW_TRACKING_USERNAME:-fedshield}
-      MLFLOW_TRACKING_PASSWORD: ${MLFLOW_TRACKING_PASSWORD:-fedshield-mlflow-change-me}
+      MLFLOW_TRACKING_PASSWORD: "${MLFLOW_TRACKING_PASSWORD:?Set MLFLOW_TRACKING_PASSWORD in .env}"
       SERVER_CONFIG: /app/config/server_config.yaml
       PRIVACY_CONFIG: /app/config/privacy_config.yaml
       CERT_DIR: /certs
@@ -118,7 +140,6 @@ services:
       GRPC_MAX_MESSAGE_LENGTH: "33554432"
     volumes:
       - certs-server:/certs:ro
-      - ./config:/app/config:ro
     networks:
       - fl-fabric
       - control-plane
@@ -139,8 +160,7 @@ services:
       GRPC_MAX_MESSAGE_LENGTH: "33554432"
     volumes:
       - certs-alpha:/certs:ro
-      - ./data/processed:/data/processed:ro
-      - ./config:/app/config:ro
+      - data-alpha:/data/processed:ro
 
   client-beta:
     <<: *client-common
@@ -157,8 +177,7 @@ services:
       GRPC_MAX_MESSAGE_LENGTH: "33554432"
     volumes:
       - certs-beta:/certs:ro
-      - ./data/processed:/data/processed:ro
-      - ./config:/app/config:ro
+      - data-beta:/data/processed:ro
 
   client-gamma:
     <<: *client-common
@@ -175,22 +194,27 @@ services:
       GRPC_MAX_MESSAGE_LENGTH: "33554432"
     volumes:
       - certs-gamma:/certs:ro
-      - ./data/processed:/data/processed:ro
-      - ./config:/app/config:ro
+      - data-gamma:/data/processed:ro
 
 networks:
+  pki-plane:
+    driver: bridge
+    internal: true
   control-plane:
     driver: bridge
     internal: false
   fl-fabric:
     driver: bridge
-    # Isolation: only model parameters traverse fl-fabric via mTLS gRPC.
-    # Raw client datasets are bind-mounted read-only and never published as ports.
-    # Flower :8080 and Vault :8200 are not published to the host.
+    internal: true
 
 volumes:
+  vault-data:
+  vault-init-keys:
   certs-server:
   certs-alpha:
   certs-beta:
   certs-gamma:
+  data-alpha:
+  data-beta:
+  data-gamma:
   mlflow-data:

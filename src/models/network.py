@@ -17,7 +17,7 @@ class LinearNormBlock(nn.Module):
         super().__init__()
         self.fc = nn.Linear(in_features, out_features)
         self.norm = nn.LayerNorm(out_features)
-        self.act = nn.ReLU(inplace=True)
+        self.act = nn.ReLU(inplace=False)
         self.drop = nn.Dropout(p=0.1)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:

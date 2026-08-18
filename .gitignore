@@ -24,29 +24,27 @@ env/
 *.swp
 *.swo
 
-# Secrets & certificates (never commit real keys)
-certs/*.crt
-certs/*.key
-certs/*.pem
-!certs/.gitkeep
+# Secrets, local env, certificates (never commit)
 .env
 .env.*
 !.env.example
+certs/
+*.key
+*.pem
+*.crt
+!config/**
 
-# Data artifacts (regenerate via scripts)
-data/raw/*
-data/processed/*
-!data/raw/.gitkeep
-!data/processed/.gitkeep
+# Generated datasets (regenerate via script or data-init)
+data/raw/
+data/processed/
 
-# MLflow local artifacts
+# MLflow / Vault local artifacts
 mlruns/
 mlartifacts/
+vault/data/
+vault/logs/
+vault-keys.json
 
 # OS
 .DS_Store
 Thumbs.db
-
-# Docker volumes
-vault/data/
-vault/logs/

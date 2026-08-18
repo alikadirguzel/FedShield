@@ -13,6 +13,18 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Guard against local paths and committed secrets
+        run: |
+          set -euo pipefail
+          if git grep -nE 'C:\\Users\\|/Users/[^/]+/|/home/[^/]+/' -- src config docker scripts tests README.md Makefile dev.ps1 SECURITY.md; then
+            echo "Refusing to ship machine-local paths"
+            exit 1
+          fi
+          if git ls-files | grep -E '(^|/)\.env$|\.pem$|\.key$|vault-keys\.json$'; then
+            echo "Refusing to ship secret files"
+            exit 1
+          fi
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -41,6 +53,9 @@ jobs:
   docker-build:
     runs-on: ubuntu-latest
     needs: lint-and-test
+    env:
+      MLFLOW_TRACKING_PASSWORD: ci-not-a-secret
+      MLFLOW_BIND: 127.0.0.1
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -51,14 +66,11 @@ jobs:
       - name: Validate Compose file
         run: docker compose config --quiet
 
-      - name: Build server image
-        run: docker build -f docker/Dockerfile.server -t fedshield-server:ci .
-
-      - name: Build client image
-        run: docker build -f docker/Dockerfile.client -t fedshield-client:ci .
-
-      - name: Build vault-init image
-        run: docker build -f docker/Dockerfile.vault -t fedshield-vault-init:ci .
-
-      - name: Build MLflow image
-        run: docker build -f docker/Dockerfile.mlflow -t fedshield-mlflow:ci .
+      - name: Build images
+        run: |
+          docker build -f docker/Dockerfile.server -t fedshield-server:ci .
+          docker build -f docker/Dockerfile.client -t fedshield-client:ci .
+          docker build -f docker/Dockerfile.data -t fedshield-data:ci .
+          docker build -f docker/Dockerfile.vault -t fedshield-vault-init:ci .
+          docker build -f docker/Dockerfile.vault-server -t fedshield-vault:ci .
+          docker build -f docker/Dockerfile.mlflow -t fedshield-mlflow:ci .

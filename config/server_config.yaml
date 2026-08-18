@@ -9,6 +9,10 @@ server:
   fraction_evaluate: 1.0
   # Round timeout (seconds) — prevents hung clients from blocking aggregation
   round_timeout: 300
+  allowed_client_ids:
+    - client-alpha
+    - client-beta
+    - client-gamma
 
 grpc:
   # Strict mTLS is mandatory in production

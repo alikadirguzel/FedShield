@@ -1,15 +1,19 @@
 #!/usr/bin/env python3
 """Generate synthetic Non-IID client partitions (Dirichlet label skew).
 
-Raw samples are written only under data/ — never transferred over the FL network.
+Partitions stay on local disk or in Docker volumes — never on the FL network.
 """
 
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
 
 import numpy as np
+
+APP_UID = 10001
+APP_GID = 10001
 
 
 def dirichlet_partition(
@@ -28,7 +32,6 @@ def dirichlet_partition(
         idx = class_indices[c]
         rng.shuffle(idx)
         proportions = rng.dirichlet(alpha=[alpha] * num_clients)
-        # Ensure no empty slice due to rounding
         cuts = (np.cumsum(proportions) * len(idx)).astype(int)[:-1]
         splits = np.split(idx, cuts)
         for client_id, split in enumerate(splits):
@@ -49,9 +52,29 @@ def synthesize_dataset(
     features = rng.normal(size=(n_samples, input_dim)).astype(np.float32)
     logits = features @ weights
     labels = logits.argmax(axis=1).astype(np.int64)
-    # Mild feature scaling
     features = (features - features.mean(axis=0)) / (features.std(axis=0) + 1e-6)
     return features.astype(np.float32), labels
+
+
+def _chown_tree(path: Path, uid: int = APP_UID, gid: int = APP_GID) -> None:
+    try:
+        os.chown(path, uid, gid)
+        if path.is_dir():
+            for child in path.rglob("*"):
+                os.chown(child, uid, gid)
+    except (OSError, AttributeError):
+        pass
+
+
+def write_partition(dest_dir: Path, features: np.ndarray, labels: np.ndarray, prefix: str | None) -> None:
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    if prefix:
+        np.save(dest_dir / f"{prefix}_x.npy", features)
+        np.save(dest_dir / f"{prefix}_y.npy", labels)
+    else:
+        np.save(dest_dir / "x.npy", features)
+        np.save(dest_dir / "y.npy", labels)
+    _chown_tree(dest_dir)
 
 
 def main() -> None:
@@ -65,6 +88,12 @@ def main() -> None:
     parser.add_argument("--raw-dir", type=Path, default=Path("data/raw"))
     parser.add_argument("--out-dir", type=Path, default=Path("data/processed"))
     parser.add_argument(
+        "--isolated-root",
+        type=Path,
+        default=None,
+        help="Write {root}/{client_id}/x.npy (Docker volumes). Skips host data/ paths.",
+    )
+    parser.add_argument(
         "--client-ids",
         nargs="+",
         default=["client-alpha", "client-beta", "client-gamma"],
@@ -74,28 +103,31 @@ def main() -> None:
     if len(args.client_ids) != args.num_clients:
         raise SystemExit("client-ids length must equal num-clients")
 
-    args.raw_dir.mkdir(parents=True, exist_ok=True)
-    args.out_dir.mkdir(parents=True, exist_ok=True)
-
     features, labels = synthesize_dataset(
         args.n_samples, args.input_dim, args.num_classes, args.seed
     )
-    np.save(args.raw_dir / "features.npy", features)
-    np.save(args.raw_dir / "labels.npy", labels)
-
     partitions = dirichlet_partition(
         labels, args.num_clients, args.num_classes, args.alpha, args.seed
     )
 
+    if args.isolated_root is None:
+        args.raw_dir.mkdir(parents=True, exist_ok=True)
+        args.out_dir.mkdir(parents=True, exist_ok=True)
+        np.save(args.raw_dir / "features.npy", features)
+        np.save(args.raw_dir / "labels.npy", labels)
+
     for client_id, indices in zip(args.client_ids, partitions):
         x = features[indices]
         y = labels[indices]
-        np.save(args.out_dir / f"{client_id}_x.npy", x)
-        np.save(args.out_dir / f"{client_id}_y.npy", y)
+        if args.isolated_root is not None:
+            write_partition(args.isolated_root / client_id, x, y, prefix=None)
+        else:
+            write_partition(args.out_dir, x, y, prefix=client_id)
         hist = np.bincount(y, minlength=args.num_classes)
         print(f"{client_id}: n={len(y)} class_hist={hist.tolist()}")
 
-    print(f"Wrote Non-IID partitions to {args.out_dir}")
+    dest = args.isolated_root or args.out_dir
+    print(f"Wrote Non-IID partitions to {dest}")
 
 
 if __name__ == "__main__":
