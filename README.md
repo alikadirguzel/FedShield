@@ -25,16 +25,15 @@ Opacus `secure_mode` is off: `torchcsprng` is unmaintained. Noise is seeded from
 ## Architecture
 
 ```
-Vault (file storage + init/unseal, pki-plane only)
-        │  vault-init writes per-identity cert volumes, then exits
-        ▼
-Flower Server :8080  ──mTLS──  Client-Alpha / Beta / Gamma
-        │                         (volume-private data + Opacus)
-        ▼
-     MLflow :5000  (basic auth, control-plane)
+Vault (PKI) ──vault-init──► per-hospital certs
+                              │
+Hospital A/B/C/D/E  ──mTLS──  Flower server :8080
+ (own data folder only)           │
+        ▲                         ▼
+   console :8500              MLflow :5000
 ```
 
-Clients attach **only** to `fl-fabric` (internal). They cannot reach Vault or MLflow. Each client mounts **only** its own data volume (`x.npy` / `y.npy`).
+Each hospital sits on its **own internal Docker network** with the server. Clients cannot resolve each other. Each mounts **only** `./data/hospitals/<id>` (`x.npy` / `y.npy`). The demo console is at http://127.0.0.1:8500 (upload + isolation proof).
 
 ## Quick start
 
@@ -49,9 +48,10 @@ docker compose up -d --build
 
 Windows (PowerShell): `python scripts/init_env.py` then `.\dev.ps1 up`.
 
+- Hospital console: http://127.0.0.1:8500 — five desks + isolation proof
 - MLflow: http://127.0.0.1:5000 — username `fedshield`, password in `.env`
 - Vault and Flower gRPC are **not** published to the host
-- Data partitions are generated inside the `data-init` container (no host `data/` required)
+- Demo partitions land in `./data/hospitals/hospital-a` … `hospital-e`
 
 ```bash
 docker compose logs -f

@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>FedShield — 5 hastane demosu</title>
+  <style>
+    :root { --bg: #0f1419; --card: #1a222c; --line: #2c3947; --text: #e8eef4; --muted: #8b9aab; --ok: #3dd68c; --bad: #ff6b6b; --accent: #6cb6ff; }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: "Segoe UI", system-ui, sans-serif; background: var(--bg); color: var(--text); line-height: 1.45; }
+    header { padding: 1.25rem 1.5rem; border-bottom: 1px solid var(--line); }
+    header h1 { margin: 0 0 .35rem; font-size: 1.35rem; font-weight: 650; }
+    header p { margin: 0; color: var(--muted); max-width: 70rem; }
+    nav { display: flex; gap: .5rem; padding: .75rem 1.5rem; border-bottom: 1px solid var(--line); }
+    nav button { background: transparent; color: var(--muted); border: 1px solid var(--line); padding: .4rem .8rem; cursor: pointer; }
+    nav button.active { color: var(--text); border-color: var(--accent); }
+    main { padding: 1.25rem 1.5rem 3rem; }
+    .panel { display: none; }
+    .panel.active { display: block; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr)); gap: 1rem; }
+    .card { background: var(--card); border: 1px solid var(--line); padding: 1rem; }
+    .card h2 { margin: 0 0 .35rem; font-size: 1rem; }
+    .story { color: var(--muted); font-size: .9rem; min-height: 2.6rem; }
+    .meta { font-family: ui-monospace, Consolas, monospace; font-size: .8rem; color: var(--muted); white-space: pre-wrap; }
+    .ok { color: var(--ok); }
+    .bad { color: var(--bad); }
+    input[type=file] { display: block; margin: .6rem 0; width: 100%; }
+    button.run, .card button { background: var(--accent); color: #081018; border: 0; padding: .45rem .8rem; cursor: pointer; font-weight: 600; }
+    a { color: var(--accent); }
+    ol.talk { max-width: 48rem; }
+    ol.talk li { margin: .6rem 0; }
+    table { width: 100%; border-collapse: collapse; font-size: .9rem; }
+    th, td { border-bottom: 1px solid var(--line); text-align: left; padding: .4rem .3rem; vertical-align: top; }
+    .banner { background: var(--card); border: 1px solid var(--line); padding: .85rem 1rem; margin-bottom: 1rem; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>FedShield · beş hastane, bir model, sıfır ham veri paylaşımı</h1>
+    <p>
+      Her kart bir hastanenin kendi masasıdır. Yüklediğiniz CSV yalnızca o hastanenin klasörüne yazılır.
+      Eğitim sırasında ağda giden şey hasta satırları değil, maskelenmiş model ağırlıklarıdır.
+    </p>
+  </header>
+  <nav>
+    <button type="button" class="active" data-tab="upload">1. Veri yükle</button>
+    <button type="button" data-tab="proof">2. İzolasyon kanıtı</button>
+    <button type="button" data-tab="talk">3. Birine nasıl anlatılır</button>
+  </nav>
+  <main>
+    <section id="upload" class="panel active">
+      <div class="banner">
+        CSV biçimi: <strong>{{ input_dim }} özellik sütunu</strong> + son sütunda tamsayı etiket (0–9).
+        Beş hastane aynı şemayı kullanır; içerik gizli kalır.
+        Demo verisi <code>data-init</code> tarafından her hastaneye farklı sınıf karışımı olarak yazılmıştır.
+        MLflow (ortak skor): <a href="{{ mlflow_url }}" target="_blank" rel="noreferrer">{{ mlflow_url }}</a>
+      </div>
+      <div class="grid">
+        {% for h in hospitals %}
+        <article class="card" data-hospital="{{ h.id }}">
+          <h2>{{ h.label }} <span class="meta">({{ h.id }})</span></h2>
+          <p class="story">{{ h.story }} Karışım: sınıflar {{ h.mix }}.</p>
+          <div class="meta" id="sum-{{ h.id }}">{{ h.summary | tojson }}</div>
+          <form class="upload" data-id="{{ h.id }}">
+            <input type="file" name="file" accept=".csv,text/csv" required />
+            <button type="submit">Bu hastaneye yükle</button>
+          </form>
+          <p class="status meta" id="st-{{ h.id }}"></p>
+        </article>
+        {% endfor %}
+      </div>
+    </section>
+
+    <section id="proof" class="panel">
+      <div class="banner">
+        Bu testler <strong>client konteynerlerin içinden</strong> çalışır. Konsolun tüm klasörleri görmesi (sizin laptop’unuz) kanıt değildir;
+        kanıt, Hospital A sürecinin Hospital B’nin dosyasını ve DNS adını görememesidir.
+      </div>
+      <p><button class="run" id="run-proof" type="button">Kanıtı çalıştır</button></p>
+      <p id="proof-overall"></p>
+      <table>
+        <thead><tr><th>Kontrol</th><th>Sonuç</th><th>Ayrıntı</th></tr></thead>
+        <tbody id="proof-body"></tbody>
+      </table>
+    </section>
+
+    <section id="talk" class="panel">
+      <ol class="talk">
+        <li><strong>Sahne:</strong> Beş hastane aynı teşhis modelini istiyor. KVKK/HIPAA nedeniyle ham kayıtlar kampüsten çıkamaz.</li>
+        <li><strong>Veri sekmesi:</strong> Her hastane kendi CSV’sini kendi kartına yükler. Hash’ler farklıdır — beş ayrı veri seti.</li>
+        <li><strong>Disk:</strong> Docker her client’a yalnızca <code>/data/processed</code> olarak kendi klasörünü bağlar. Diğer hastanenin volume’u o konteynerde yoktur.</li>
+        <li><strong>Ağ:</strong> Her hastane kendi iç Docker ağındadır; yalnızca Flower sunucusuna ulaşır. Kanıt: Hospital A, <code>hospital-b</code> adını çözemez.</li>
+        <li><strong>Kablo:</strong> Client logunda <code>raw_samples_sent: 0</code> ve <code>payload_kind: model_weights</code>. SecAgg açıkken sunucu tekil güncellemeyi de göremez.</li>
+        <li><strong>Sonuç:</strong> MLflow’da <code>accuracy</code> yükselir, <code>num_fit_clients = 5</code>. Model beşinin toplamından öğrenmiştir; hiçbir satır birleşmemiştir.</li>
+      </ol>
+    </section>
+  </main>
+  <script>
+    document.querySelectorAll("nav button").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        document.querySelectorAll("nav button").forEach((b) => b.classList.remove("active"));
+        document.querySelectorAll(".panel").forEach((p) => p.classList.remove("active"));
+        btn.classList.add("active");
+        document.getElementById(btn.dataset.tab).classList.add("active");
+      });
+    });
+    document.querySelectorAll("form.upload").forEach((form) => {
+      form.addEventListener("submit", async (ev) => {
+        ev.preventDefault();
+        const id = form.dataset.id;
+        const status = document.getElementById("st-" + id);
+        const body = new FormData(form);
+        status.textContent = "yükleniyor…";
+        const res = await fetch("/api/hospitals/" + id + "/upload", { method: "POST", body });
+        const data = await res.json();
+        if (!data.ok) {
+          status.innerHTML = '<span class="bad">' + (data.error || "hata") + "</span>";
+          return;
+        }
+        status.innerHTML = '<span class="ok">yalnızca ' + id + " klasörüne yazıldı</span> " +
+          (data.restart ? ("(" + data.restart + ")") : "");
+        document.getElementById("sum-" + id).textContent = JSON.stringify(data.summary, null, 2);
+      });
+    });
+    document.getElementById("run-proof").addEventListener("click", async () => {
+      const overall = document.getElementById("proof-overall");
+      const body = document.getElementById("proof-body");
+      overall.textContent = "çalışıyor…";
+      body.innerHTML = "";
+      const res = await fetch("/api/proof");
+      const data = await res.json();
+      overall.innerHTML = data.ok
+        ? '<span class="ok">Kanıt: client’lar birbirinin verisine ve DNS adına erişemiyor.</span>'
+        : '<span class="bad">Bazı kontroller başarısız. Stack ayakta mı? (docker compose up)</span>';
+      (data.checks || []).forEach((row) => {
+        const tr = document.createElement("tr");
+        const detail = typeof row.detail === "string" ? row.detail : JSON.stringify(row.detail);
+        tr.innerHTML = "<td>" + row.id + "</td><td class='" + (row.ok ? "ok" : "bad") + "'>" +
+          (row.ok ? "PASS" : "FAIL") + "</td><td class='meta'>" + detail + "</td>";
+        body.appendChild(tr);
+      });
+    });
+  </script>
+</body>
+</html>

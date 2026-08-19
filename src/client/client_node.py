@@ -24,7 +24,7 @@ from src.common.secagg import (
     mask_weights,
     pairwise_masks,
 )
-from src.common.utils import get_parameters, set_parameters
+from src.common.utils import get_parameters, parameters_nbytes, set_parameters
 from src.models.network import create_model
 
 logger = setup_logger("fedshield.client")
@@ -54,6 +54,11 @@ class FedShieldClient(fl.client.NumPyClient):
         self.secagg_keypair = generate_keypair()
 
         rounds = int(num_rounds or fed_cfg.get("num_rounds", 5))
+        mode = str((privacy_cfg.get("privacy") or {}).get("mode") or "").strip().lower()
+        if "enabled" in dp_cfg:
+            dp_enabled = bool(dp_cfg.get("enabled"))
+        else:
+            dp_enabled = mode != "data_isolation"
         self.dp_config = DPTrainConfig(
             epochs=int(train_cfg.get("local_epochs", 2)),
             learning_rate=float(train_cfg.get("learning_rate", 0.01)),
@@ -66,6 +71,7 @@ class FedShieldClient(fl.client.NumPyClient):
             num_rounds=rounds,
             calibrate_to_target=bool(dp_cfg.get("calibrate_to_target", True)),
             poisson_sampling=bool(dp_cfg.get("poisson_sampling", True)),
+            dp_enabled=dp_enabled,
         )
 
         self.model = create_model(self.input_dim, self.num_classes)
@@ -145,6 +151,17 @@ class FedShieldClient(fl.client.NumPyClient):
                 extra={"error": str(exc), "client_id": self.client_id},
             )
             raise
+        logger.info(
+            "Egress audit — raw samples stay local",
+            extra={
+                "client_id": self.client_id,
+                "raw_samples_sent": 0,
+                "payload_kind": "model_weights",
+                "n_tensors": len(outbound),
+                "nbytes": parameters_nbytes(outbound),
+                "secagg_applied": bool(metrics.get("secagg_applied")),
+            },
+        )
         return outbound, len(self.train_ds), metrics
 
     def evaluate(
@@ -165,7 +182,7 @@ class FedShieldClient(fl.client.NumPyClient):
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="FedShield confidential FL client")
-    parser.add_argument("--client-id", default=os.getenv("CLIENT_ID", "client-alpha"))
+    parser.add_argument("--client-id", default=os.getenv("CLIENT_ID", "hospital-a"))
     parser.add_argument(
         "--privacy-config",
         default=os.getenv("PRIVACY_CONFIG", "config/privacy_config.yaml"),

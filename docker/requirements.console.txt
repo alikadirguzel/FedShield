@@ -1,0 +1,4 @@
+flask==3.0.3
+docker==7.1.0
+numpy==1.26.4
+gunicorn==21.2.0

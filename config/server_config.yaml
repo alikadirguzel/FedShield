@@ -1,33 +1,29 @@
 # Federated server runtime configuration
 server:
   address: "0.0.0.0:8080"
-  num_rounds: 5
-  min_available_clients: 3
-  min_fit_clients: 3
-  min_evaluate_clients: 3
+  num_rounds: 10
+  min_available_clients: 5
+  min_fit_clients: 5
+  min_evaluate_clients: 5
   fraction_fit: 1.0
   fraction_evaluate: 1.0
-  # Round timeout (seconds) — prevents hung clients from blocking aggregation
   round_timeout: 300
   allowed_client_ids:
-    - client-alpha
-    - client-beta
-    - client-gamma
+    - hospital-a
+    - hospital-b
+    - hospital-c
+    - hospital-d
+    - hospital-e
 
 grpc:
-  # Strict mTLS is mandatory in production
   require_mtls: true
-  # 32 MiB is enough for FedShieldNet; raise together with GRPC_MAX_MESSAGE_LENGTH
   max_message_length: 33554432
-  # Paths are overridden by Vault-provisioned certs at runtime
   ca_cert: "/certs/ca.crt"
   server_cert: "/certs/server.crt"
   server_key: "/certs/server.key"
 
 aggregation:
-  # secagg | trimmed_mean | krum | fedavg
   # secagg: server sees only the cancelled-mask aggregate (dropout aborts the round)
-  # trimmed_mean / krum: Byzantine-robust, requires unmasked individual updates
   mode: secagg
   trim_beta: 0.2
   num_malicious_clients: 0

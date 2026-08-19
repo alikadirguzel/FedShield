@@ -67,8 +67,16 @@ class MLflowTracker:
                 self._mlflow.end_run()
         except Exception:  # noqa: BLE001
             pass
-        self._active_run = self._mlflow.start_run(run_name=run_name, tags=tags or {})
-        logger.info("MLflow parent run started", extra={"run_name": run_name})
+        try:
+            self._active_run = self._mlflow.start_run(run_name=run_name, tags=tags or {})
+            logger.info("MLflow parent run started", extra={"run_name": run_name})
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "MLflow start_run failed; metrics will be logged locally only",
+                extra={"error": str(exc)},
+            )
+            self._enabled = False
+            self._active_run = None
 
     def end_run(self) -> None:
         if self._mlflow is None or not self._enabled:

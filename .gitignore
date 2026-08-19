@@ -37,6 +37,7 @@ certs/
 # Generated datasets (regenerate via script or data-init)
 data/raw/
 data/processed/
+data/hospitals/
 
 # MLflow / Vault local artifacts
 mlruns/

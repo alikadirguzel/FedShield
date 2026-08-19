@@ -1,0 +1,9 @@
+{
+  "hospitals": [
+    {"id": "hospital-a", "label": "Hospital A", "mix": "0-1", "story": "Mostly classes 0 and 1 (e.g. one patient demographic)."},
+    {"id": "hospital-b", "label": "Hospital B", "mix": "2-3", "story": "Mostly classes 2 and 3."},
+    {"id": "hospital-c", "label": "Hospital C", "mix": "4-5", "story": "Mostly classes 4 and 5."},
+    {"id": "hospital-d", "label": "Hospital D", "mix": "6-7", "story": "Mostly classes 6 and 7."},
+    {"id": "hospital-e", "label": "Hospital E", "mix": "8-9", "story": "Mostly classes 8 and 9."}
+  ]
+}

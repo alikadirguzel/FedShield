@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Generate synthetic Non-IID client partitions (Dirichlet label skew).
+"""Generate isolated hospital partitions (never placed on the FL network).
 
-Partitions stay on local disk or in Docker volumes — never on the FL network.
+Default profile ``hospitals``: five distinct class mixes (like five hospitals
+seeing different patient demographics) from one shared task/schema.
 """
 
 from __future__ import annotations
@@ -38,6 +39,37 @@ def dirichlet_partition(
             client_indices[client_id].extend(split.tolist())
 
     return [np.array(sorted(indices), dtype=np.int64) for indices in client_indices]
+
+
+def hospital_mix_partition(
+    labels: np.ndarray,
+    num_clients: int,
+    num_classes: int,
+    seed: int,
+    primary_fraction: float = 0.75,
+) -> list[np.ndarray]:
+    """Each hospital is dominated by a disjoint pair of classes, plus a little overlap."""
+    rng = np.random.default_rng(seed)
+    pairs = [(i % num_classes, (i + 1) % num_classes) for i in range(0, num_clients * 2, 2)]
+    assigned: list[list[int]] = [[] for _ in range(num_clients)]
+    leftover: list[int] = []
+    for cls in range(num_classes):
+        idx = np.where(labels == cls)[0]
+        rng.shuffle(idx)
+        owners = [i for i, pair in enumerate(pairs[:num_clients]) if cls in pair]
+        if not owners:
+            leftover.extend(idx.tolist())
+            continue
+        cut = int(len(idx) * primary_fraction)
+        primary, rest = idx[:cut], idx[cut:]
+        splits = np.array_split(primary, len(owners))
+        for owner, split in zip(owners, splits):
+            assigned[owner].extend(split.tolist())
+        leftover.extend(rest.tolist())
+    rng.shuffle(leftover)
+    for i, sample in enumerate(leftover):
+        assigned[i % num_clients].append(int(sample))
+    return [np.array(sorted(set(items)), dtype=np.int64) for items in assigned]
 
 
 def synthesize_dataset(
@@ -79,7 +111,13 @@ def write_partition(dest_dir: Path, features: np.ndarray, labels: np.ndarray, pr
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Generate Non-IID FedShield partitions")
-    parser.add_argument("--num-clients", type=int, default=3)
+    parser.add_argument("--num-clients", type=int, default=5)
+    parser.add_argument(
+        "--profile",
+        choices=("hospitals", "dirichlet"),
+        default="hospitals",
+        help="hospitals: 5 distinct class mixes; dirichlet: classic label skew",
+    )
     parser.add_argument("--n-samples", type=int, default=6000)
     parser.add_argument("--input-dim", type=int, default=784)
     parser.add_argument("--num-classes", type=int, default=10)
@@ -96,7 +134,7 @@ def main() -> None:
     parser.add_argument(
         "--client-ids",
         nargs="+",
-        default=["client-alpha", "client-beta", "client-gamma"],
+        default=["hospital-a", "hospital-b", "hospital-c", "hospital-d", "hospital-e"],
     )
     args = parser.parse_args()
 
@@ -106,9 +144,14 @@ def main() -> None:
     features, labels = synthesize_dataset(
         args.n_samples, args.input_dim, args.num_classes, args.seed
     )
-    partitions = dirichlet_partition(
-        labels, args.num_clients, args.num_classes, args.alpha, args.seed
-    )
+    if args.profile == "hospitals":
+        partitions = hospital_mix_partition(
+            labels, args.num_clients, args.num_classes, args.seed
+        )
+    else:
+        partitions = dirichlet_partition(
+            labels, args.num_clients, args.num_classes, args.alpha, args.seed
+        )
 
     if args.isolated_root is None:
         args.raw_dir.mkdir(parents=True, exist_ok=True)

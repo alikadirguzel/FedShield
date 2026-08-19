@@ -18,14 +18,15 @@ import hvac
 def wait_for_vault(client: hvac.Client, timeout: int = 120) -> None:
     """Block until the Vault HTTP API answers (sealed or unsealed)."""
     start = time.time()
+    last_error = "no response"
     while time.time() - start < timeout:
         try:
             client.sys.is_initialized()
             return
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as exc:  # noqa: BLE001
+            last_error = str(exc)
         time.sleep(2)
-    raise RuntimeError("Vault did not become ready")
+    raise RuntimeError(f"Vault did not become ready: {last_error}")
 
 
 def _keys_path(init_dir: Path) -> Path:
@@ -257,6 +258,11 @@ def create_roles(client: hvac.Client) -> None:
         "pki_int/roles/fedshield-client",
         {
             "allowed_domains": [
+                "hospital-a",
+                "hospital-b",
+                "hospital-c",
+                "hospital-d",
+                "hospital-e",
                 "client-alpha",
                 "client-beta",
                 "client-gamma",
@@ -326,14 +332,21 @@ def main() -> int:
     )
     write_cert_bundle(cert_dir / "server", server_issue, role="server")
 
-    for cn in ("client-alpha", "client-beta", "client-gamma"):
+    client_cns = (
+        "hospital-a",
+        "hospital-b",
+        "hospital-c",
+        "hospital-d",
+        "hospital-e",
+    )
+    for cn in client_cns:
         print(f"[vault-init] Issuing certificate for {cn}", flush=True)
         issue = issue_certificate(client, "fedshield-client", cn)
         write_cert_bundle(cert_dir / cn, issue, role="client")
 
     ready = cert_dir / "server" / ".vault_ready"
     ready.write_text("ok", encoding="utf-8")
-    for folder in ("server", "client-alpha", "client-beta", "client-gamma"):
+    for folder in ("server", *client_cns):
         _chown_tree(cert_dir / folder, uid=10001, gid=10001)
     print("[vault-init] PKI bootstrap complete.", flush=True)
     return 0

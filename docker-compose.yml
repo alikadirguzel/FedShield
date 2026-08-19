@@ -1,11 +1,11 @@
-# FedShield — portable Compose stack (no host home paths, no baked-in secrets)
+# FedShield — 5-hospital demo
 #
 # Networks:
-#   pki-plane     — Vault + vault-init only (internal)
-#   control-plane — MLflow + Flower server
-#   fl-fabric     — Flower server + clients, mTLS gRPC only (internal)
+#   pki-plane       — Vault + vault-init only (internal)
+#   control-plane   — MLflow + Flower server + demo console
+#   fl-hospital-*   — one internal network per hospital (server + that client only)
 #
-# Required: copy .env.example → .env (scripts/init_env.py) and set a password.
+# Required: python scripts/init_env.py then docker compose up -d --build
 name: fedshield
 
 x-client-common: &client-common
@@ -19,16 +19,6 @@ x-client-common: &client-common
       condition: service_completed_successfully
     server:
       condition: service_started
-  environment:
-    SERVER_ADDRESS: server:8080
-    PRIVACY_CONFIG: /app/config/privacy_config.yaml
-    CERT_DIR: /certs
-    DATA_DIR: /data/processed
-    FEDSHIELD_DEV_CERTS: "false"
-    PYTHONPATH: /app
-    GRPC_MAX_MESSAGE_LENGTH: "33554432"
-  networks:
-    - fl-fabric
   restart: on-failure
 
 services:
@@ -40,10 +30,20 @@ services:
     environment:
       PYTHONUNBUFFERED: "1"
     volumes:
-      - data-alpha:/out/client-alpha
-      - data-beta:/out/client-beta
-      - data-gamma:/out/client-gamma
-    command: ["--isolated-root", "/out"]
+      - ./data/hospitals/hospital-a:/out/hospital-a
+      - ./data/hospitals/hospital-b:/out/hospital-b
+      - ./data/hospitals/hospital-c:/out/hospital-c
+      - ./data/hospitals/hospital-d:/out/hospital-d
+      - ./data/hospitals/hospital-e:/out/hospital-e
+    command:
+      [
+        "--isolated-root", "/out",
+        "--num-clients", "5",
+        "--client-ids",
+        "hospital-a", "hospital-b", "hospital-c", "hospital-d", "hospital-e",
+        "--profile", "hospitals",
+        "--n-samples", "8000",
+      ]
     restart: "no"
 
   vault:
@@ -51,10 +51,10 @@ services:
       context: .
       dockerfile: docker/Dockerfile.vault-server
     container_name: fedshield-vault
-    cap_add:
-      - IPC_LOCK
     environment:
       VAULT_ADDR: http://127.0.0.1:8200
+      SKIP_SETCAP: "true"
+    command: ["server"]
     volumes:
       - vault-data:/vault/file
     networks:
@@ -81,9 +81,11 @@ services:
     volumes:
       - vault-init-keys:/vault-init
       - certs-server:/certs/server
-      - certs-alpha:/certs/client-alpha
-      - certs-beta:/certs/client-beta
-      - certs-gamma:/certs/client-gamma
+      - certs-hospital-a:/certs/hospital-a
+      - certs-hospital-b:/certs/hospital-b
+      - certs-hospital-c:/certs/hospital-c
+      - certs-hospital-d:/certs/hospital-d
+      - certs-hospital-e:/certs/hospital-e
     networks:
       - pki-plane
     restart: "no"
@@ -141,60 +143,126 @@ services:
     volumes:
       - certs-server:/certs:ro
     networks:
-      - fl-fabric
       - control-plane
+      - fl-hospital-a
+      - fl-hospital-b
+      - fl-hospital-c
+      - fl-hospital-d
+      - fl-hospital-e
     restart: on-failure
 
-  client-alpha:
+  hospital-a:
     <<: *client-common
-    container_name: fedshield-client-alpha
+    container_name: fedshield-hospital-a
     environment:
-      CLIENT_ID: client-alpha
+      CLIENT_ID: hospital-a
       SERVER_ADDRESS: server:8080
       PRIVACY_CONFIG: /app/config/privacy_config.yaml
       CERT_DIR: /certs
       DATA_DIR: /data/processed
       FEDSHIELD_DEV_CERTS: "false"
       PYTHONPATH: /app
-      FEDSHIELD_SERVICE: client-alpha
+      FEDSHIELD_SERVICE: hospital-a
       GRPC_MAX_MESSAGE_LENGTH: "33554432"
     volumes:
-      - certs-alpha:/certs:ro
-      - data-alpha:/data/processed:ro
+      - certs-hospital-a:/certs:ro
+      - ./data/hospitals/hospital-a:/data/processed:ro
+    networks:
+      - fl-hospital-a
 
-  client-beta:
+  hospital-b:
     <<: *client-common
-    container_name: fedshield-client-beta
+    container_name: fedshield-hospital-b
     environment:
-      CLIENT_ID: client-beta
+      CLIENT_ID: hospital-b
       SERVER_ADDRESS: server:8080
       PRIVACY_CONFIG: /app/config/privacy_config.yaml
       CERT_DIR: /certs
       DATA_DIR: /data/processed
       FEDSHIELD_DEV_CERTS: "false"
       PYTHONPATH: /app
-      FEDSHIELD_SERVICE: client-beta
+      FEDSHIELD_SERVICE: hospital-b
       GRPC_MAX_MESSAGE_LENGTH: "33554432"
     volumes:
-      - certs-beta:/certs:ro
-      - data-beta:/data/processed:ro
+      - certs-hospital-b:/certs:ro
+      - ./data/hospitals/hospital-b:/data/processed:ro
+    networks:
+      - fl-hospital-b
 
-  client-gamma:
+  hospital-c:
     <<: *client-common
-    container_name: fedshield-client-gamma
+    container_name: fedshield-hospital-c
     environment:
-      CLIENT_ID: client-gamma
+      CLIENT_ID: hospital-c
       SERVER_ADDRESS: server:8080
       PRIVACY_CONFIG: /app/config/privacy_config.yaml
       CERT_DIR: /certs
       DATA_DIR: /data/processed
       FEDSHIELD_DEV_CERTS: "false"
       PYTHONPATH: /app
-      FEDSHIELD_SERVICE: client-gamma
+      FEDSHIELD_SERVICE: hospital-c
       GRPC_MAX_MESSAGE_LENGTH: "33554432"
     volumes:
-      - certs-gamma:/certs:ro
-      - data-gamma:/data/processed:ro
+      - certs-hospital-c:/certs:ro
+      - ./data/hospitals/hospital-c:/data/processed:ro
+    networks:
+      - fl-hospital-c
+
+  hospital-d:
+    <<: *client-common
+    container_name: fedshield-hospital-d
+    environment:
+      CLIENT_ID: hospital-d
+      SERVER_ADDRESS: server:8080
+      PRIVACY_CONFIG: /app/config/privacy_config.yaml
+      CERT_DIR: /certs
+      DATA_DIR: /data/processed
+      FEDSHIELD_DEV_CERTS: "false"
+      PYTHONPATH: /app
+      FEDSHIELD_SERVICE: hospital-d
+      GRPC_MAX_MESSAGE_LENGTH: "33554432"
+    volumes:
+      - certs-hospital-d:/certs:ro
+      - ./data/hospitals/hospital-d:/data/processed:ro
+    networks:
+      - fl-hospital-d
+
+  hospital-e:
+    <<: *client-common
+    container_name: fedshield-hospital-e
+    environment:
+      CLIENT_ID: hospital-e
+      SERVER_ADDRESS: server:8080
+      PRIVACY_CONFIG: /app/config/privacy_config.yaml
+      CERT_DIR: /certs
+      DATA_DIR: /data/processed
+      FEDSHIELD_DEV_CERTS: "false"
+      PYTHONPATH: /app
+      FEDSHIELD_SERVICE: hospital-e
+      GRPC_MAX_MESSAGE_LENGTH: "33554432"
+    volumes:
+      - certs-hospital-e:/certs:ro
+      - ./data/hospitals/hospital-e:/data/processed:ro
+    networks:
+      - fl-hospital-e
+
+  console:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.console
+    container_name: fedshield-console
+    environment:
+      PYTHONUNBUFFERED: "1"
+      HOSPITALS_ROOT: /data/hospitals
+      MLFLOW_PUBLIC_URL: http://127.0.0.1:5000
+    ports:
+      - "127.0.0.1:8500:8500"
+    volumes:
+      - ./data/hospitals:/data/hospitals
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - control-plane
+    restart: on-failure
 
 networks:
   pki-plane:
@@ -203,7 +271,19 @@ networks:
   control-plane:
     driver: bridge
     internal: false
-  fl-fabric:
+  fl-hospital-a:
+    driver: bridge
+    internal: true
+  fl-hospital-b:
+    driver: bridge
+    internal: true
+  fl-hospital-c:
+    driver: bridge
+    internal: true
+  fl-hospital-d:
+    driver: bridge
+    internal: true
+  fl-hospital-e:
     driver: bridge
     internal: true
 
@@ -211,10 +291,9 @@ volumes:
   vault-data:
   vault-init-keys:
   certs-server:
-  certs-alpha:
-  certs-beta:
-  certs-gamma:
-  data-alpha:
-  data-beta:
-  data-gamma:
+  certs-hospital-a:
+  certs-hospital-b:
+  certs-hospital-c:
+  certs-hospital-d:
+  certs-hospital-e:
   mlflow-data:

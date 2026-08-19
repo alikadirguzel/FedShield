@@ -99,6 +99,7 @@ function Invoke-Up {
     Write-Host ""
     Write-Host "Stack starting. Check status with:  docker compose ps" -ForegroundColor Green
     Write-Host "MLflow UI: http://localhost:5000"
+    Write-Host "Hospital console: http://localhost:8500"
     Write-Host "Vault is internal (not published to the host)"
     Write-Host "Logs:      .\dev.ps1 logs"
     Write-Host "Next time (fast):  .\dev.ps1 start"
@@ -187,13 +188,14 @@ function Invoke-Health {
     }
 
     $mlflowOk = Test-Http "http://localhost:5000"
+    $consoleOk = Test-Http "http://localhost:8500"
     $vaultOk = Test-ContainerState "fedshield-vault"
     $serverOk = Test-ContainerState "fedshield-server"
 
     $vaultInit = docker inspect -f "{{.State.ExitCode}}" fedshield-vault-init 2>$null
     $vaultInitOk = ($vaultInit -eq "0")
 
-    $need = @("vault", "mlflow", "server", "client-alpha", "client-beta", "client-gamma")
+    $need = @("vault", "mlflow", "server", "hospital-a", "hospital-b", "hospital-c", "hospital-d", "hospital-e", "console")
     $upNames = @()
     foreach ($c in $running) {
         if ($c.State -eq "running" -or $c.Status -like "Up*") {
@@ -206,6 +208,7 @@ function Invoke-Health {
         @{ Name = "Vault container"; Ok = $vaultOk }
         @{ Name = "Vault-init exit 0"; Ok = $vaultInitOk }
         @{ Name = "MLflow UI :5000"; Ok = $mlflowOk }
+        @{ Name = "Hospital console :8500"; Ok = $consoleOk }
         @{ Name = "FL Server container"; Ok = $serverOk }
     )
     foreach ($svc in $need) {
@@ -228,8 +231,9 @@ function Invoke-Health {
     Write-Host "`n=== How to read this ===" -ForegroundColor Cyan
     Write-Host "1) All [OK] + MLflow opens in browser => infra is up"
     Write-Host "2) Server logs show 'fit_round' / 'Aggregated fit metrics' => training works"
-    Write-Host "3) Open http://localhost:5000 and look for experiment 'fedshield-federated-dp'"
-    Write-Host "4) If vault-init FAIL: run  .\dev.ps1 down  then  .\dev.ps1 up"
+    Write-Host "3) Open http://localhost:8500 (upload + isolation proof)"
+    Write-Host "4) Open http://localhost:5000 experiment 'fedshield-federated-dp'"
+    Write-Host "5) If vault-init FAIL: run  .\dev.ps1 down  then  .\dev.ps1 up"
 
     if ($failed -gt 0) {
         Write-Host "`nResult: NOT healthy ($failed checks failed)" -ForegroundColor Red

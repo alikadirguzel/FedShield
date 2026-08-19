@@ -3,6 +3,10 @@ FROM hashicorp/vault:1.15
 USER root
 COPY config/vault.hcl /vault/config/vault.hcl
 RUN chown vault:vault /vault/config/vault.hcl
-USER vault
 
-CMD ["server", "-config=/vault/config/vault.hcl"]
+# Docker Desktop does not grant CAP_SETFCAP; mlock is already disabled in vault.hcl.
+# The official entrypoint prepends -config=/vault/config — do not pass -config again
+# or Vault loads the same listener twice and 8200 is already in use.
+ENV SKIP_SETCAP=true
+
+CMD ["server"]

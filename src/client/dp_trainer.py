@@ -45,6 +45,7 @@ class DPTrainConfig:
     num_rounds: int = 5
     calibrate_to_target: bool = True
     poisson_sampling: bool = True
+    dp_enabled: bool = True
 
 
 @dataclass
@@ -102,6 +103,10 @@ class DPTrainer:
         return max(1, self._steps_per_epoch() * int(self.config.epochs) * int(self.config.num_rounds))
 
     def _calibrate(self) -> None:
+        if not self.config.dp_enabled:
+            self.noise_multiplier = 0.0
+            logger.info("DP-SGD off — data isolation + SecAgg only (no gradient noise)")
+            return
         if not self.config.calibrate_to_target:
             self.noise_multiplier = float(self.config.noise_multiplier)
             logger.info(
@@ -134,6 +139,8 @@ class DPTrainer:
 
     def recalibrate_if_idle(self, num_rounds: int) -> None:
         """Adopt server round count before any accountant steps have been recorded."""
+        if not self.config.dp_enabled:
+            return
         rounds = max(int(num_rounds), 1)
         if rounds == self.config.num_rounds:
             return
@@ -147,7 +154,7 @@ class DPTrainer:
         self._calibrate()
 
     def get_epsilon(self) -> float:
-        if len(self.privacy_engine.accountant) == 0:
+        if not self.config.dp_enabled or len(self.privacy_engine.accountant) == 0:
             return 0.0
         return float(self.privacy_engine.get_epsilon(self.config.target_delta))
 
@@ -158,7 +165,9 @@ class DPTrainer:
         return model
 
     def train(self, train_loader: DataLoader) -> DPTrainResult:
-        """Run DP-SGD; refuse the next step once spent ε reaches epsilon_max."""
+        """Run local training; DP-SGD is optional (off in data_isolation mode)."""
+        if not self.config.dp_enabled:
+            return self._train_plain(train_loader)
         spent = self.get_epsilon()
         if spent >= self.config.epsilon_max:
             logger.warning(
@@ -254,6 +263,50 @@ class DPTrainer:
             noise_multiplier=self.noise_multiplier,
             steps_taken=steps_taken,
             reason=reason,
+        )
+
+    def _train_plain(self, train_loader: DataLoader) -> DPTrainResult:
+        work = copy.deepcopy(self.model).to(self.device)
+        work.train()
+        optimizer = torch.optim.SGD(work.parameters(), lr=self.config.learning_rate)
+        total_loss = 0.0
+        total_correct = 0
+        total_samples = 0
+        steps_taken = 0
+        epochs_done = 0
+        for epoch in range(self.config.epochs):
+            epoch_loss = 0.0
+            epoch_correct = 0
+            epoch_samples = 0
+            for features, labels in train_loader:
+                features = features.to(self.device)
+                labels = labels.to(self.device)
+                if labels.numel() == 0:
+                    continue
+                optimizer.zero_grad(set_to_none=True)
+                logits = work(features)
+                loss = self._criterion(logits, labels)
+                loss.backward()
+                optimizer.step()
+                steps_taken += 1
+                batch_size = int(labels.size(0))
+                epoch_loss += loss.item() * batch_size
+                epoch_correct += int((logits.argmax(dim=1) == labels).sum().item())
+                epoch_samples += batch_size
+            epochs_done = epoch + 1
+            total_loss += epoch_loss
+            total_correct += epoch_correct
+            total_samples += epoch_samples
+        self.model.load_state_dict(work.state_dict())
+        return DPTrainResult(
+            loss=total_loss / max(total_samples, 1),
+            accuracy=total_correct / max(total_samples, 1),
+            epsilon=0.0,
+            delta=self.config.target_delta,
+            epochs_completed=epochs_done,
+            stopped_early=False,
+            noise_multiplier=0.0,
+            steps_taken=steps_taken,
         )
 
     def evaluate(self, data_loader: DataLoader) -> Dict[str, float]:

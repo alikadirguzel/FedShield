@@ -20,8 +20,6 @@ RUN useradd --create-home --uid 10001 mlflow \
     && mkdir -p /mlflow/artifacts \
     && chown -R mlflow:mlflow /mlflow /app
 
-USER mlflow
-
-EXPOSE 5000
-
-CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "1", "--threads", "4", "--timeout", "120", "mlflow_wsgi:app"]
+# Start as root so the named volume can be re-owned, then gunicorn drops to mlflow.
+# Docker Desktop often creates /mlflow as root:root (mode 755), which makes sqlite read-only.
+CMD ["sh", "-c", "mkdir -p /mlflow/artifacts && chown -R mlflow:mlflow /mlflow && exec gunicorn --user mlflow --group mlflow --bind 0.0.0.0:5000 --workers 1 --threads 4 --timeout 120 mlflow_wsgi:app"]

@@ -1,0 +1,24 @@
+FROM python:3.11-slim-bookworm
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PYTHONPATH=/app
+
+WORKDIR /app
+
+RUN pip install --upgrade pip \
+    && pip install flask==3.0.3 docker==7.1.0 numpy==1.26.4
+
+COPY config/tenants.json /app/config/tenants.json
+COPY src/common /app/src/common
+COPY src/console /app/src/console
+
+RUN useradd --create-home --uid 10001 fedshield \
+    && mkdir -p /data/hospitals \
+    && chown -R fedshield:fedshield /app /data
+
+# Root: docker.sock must be readable for isolation proofs.
+USER root
+EXPOSE 8500
+CMD ["python", "-m", "src.console.app"]
