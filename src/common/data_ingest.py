@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import io
 from pathlib import Path
 from typing import Any
 
@@ -33,28 +34,53 @@ def write_partition(dest_dir: Path, features: np.ndarray, labels: np.ndarray) ->
 
 
 def load_csv_xy(csv_path: Path, input_dim: int) -> tuple[np.ndarray, np.ndarray]:
-    """CSV: feature columns then a final integer label column."""
-    raw = np.genfromtxt(csv_path, delimiter=",")
+    """CSV: numeric feature columns then a final integer label column.
+
+    Accepts an optional header row and comma or semicolon delimiters.
+    """
+    text = Path(csv_path).read_text(encoding="utf-8-sig", errors="replace")
+    first = next((ln for ln in text.splitlines() if ln.strip()), "")
+    delimiter = ";" if first.count(";") > first.count(",") else ","
+    raw = np.genfromtxt(csv_path, delimiter=delimiter, encoding="utf-8-sig")
     if raw.ndim == 1:
         raw = np.atleast_2d(raw)
-    if raw.size == 0 or np.isnan(raw).all():
-        raw = np.genfromtxt(csv_path, delimiter=",", skip_header=1)
+    if raw.size == 0 or not np.isfinite(raw).any():
+        raw = np.genfromtxt(csv_path, delimiter=delimiter, skip_header=1, encoding="utf-8-sig")
         if raw.ndim == 1:
             raw = np.atleast_2d(raw)
-    if np.isnan(raw[0]).all() and raw.shape[0] > 1:
+    if raw.size == 0 or not np.isfinite(raw).any():
+        raise ValueError("CSV okunamadı. Sayısal sütunlar ve son sütunda etiket olmalı.")
+    if raw.shape[0] > 1 and np.isnan(raw[0]).all():
         raw = raw[1:]
-    if np.isnan(raw).any():
-        raise ValueError("CSV contains non-numeric cells (use a header row plus numeric feature/label columns)")
+    finite_rows = np.isfinite(raw).all(axis=1)
+    raw = raw[finite_rows]
+    if raw.size == 0:
+        raise ValueError("CSV'de sayısal satır yok (başlık dışında metin/Excel formatı olabilir).")
     if raw.shape[1] < 2:
-        raise ValueError("CSV needs feature columns plus a label column")
+        raise ValueError("CSV'de en az bir özellik sütunu ve bir etiket sütunu olmalı.")
     features = raw[:, :-1].astype(np.float32)
     labels = raw[:, -1].astype(np.int64)
-    if features.shape[1] != int(input_dim):
+    expected = int(input_dim)
+    if features.shape[1] != expected:
         raise ValueError(
-            f"CSV has {features.shape[1]} feature columns; this job expects {input_dim}. "
-            "All hospitals must share the same schema."
+            f"CSV'de {features.shape[1]} özellik sütunu var; bu model {expected} bekliyor "
+            f"(son sütun etiket). Rastgele bir Excel dosyası yüklemeyin — karttaki "
+            f"'örnek CSV indir' ile doğru şemayı alın."
         )
     return features, labels
+
+
+def partition_to_csv(dest_dir: Path) -> str:
+    """Serialize an existing npy partition to CSV text (features..., label)."""
+    x_path, y_path = partition_paths(Path(dest_dir))
+    if not x_path.exists() or not y_path.exists():
+        raise FileNotFoundError("Bu hastanede henüz x.npy/y.npy yok")
+    features = np.load(x_path)
+    labels = np.load(y_path).reshape(-1, 1)
+    stacked = np.hstack([features.astype(np.float32), labels.astype(np.float32)])
+    buf = io.StringIO()
+    np.savetxt(buf, stacked, delimiter=",", fmt="%.6g")
+    return buf.getvalue()
 
 
 def summarize_partition(dest_dir: Path, num_classes: int = 10) -> dict[str, Any]:

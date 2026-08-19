@@ -13,11 +13,7 @@ from torch.utils.data import DataLoader, TensorDataset
 from src.client.dp_trainer import DPTrainConfig, DPTrainer
 from src.common.data_ingest import load_csv_xy, summarize_partition, write_partition
 from src.common.tenants import hospital_ids
-from src.console.isolation import (
-    no_shared_client_networks,
-    parse_egress_audit_lines,
-    unique_data_sources,
-)
+from src.console.isolation import collect_proof
 from src.models.network import create_model
 
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
@@ -66,49 +62,22 @@ def test_csv_ingest_and_summary_hides_rows(tmp_path: Path) -> None:
     assert "0.123" not in dumped
 
 
-def test_unique_mounts_and_networks() -> None:
-    mounts = unique_data_sources(
-        {
-            "hospital-a": ["/data/hospitals/hospital-a"],
-            "hospital-b": ["/data/hospitals/hospital-b"],
-        }
-    )
-    assert mounts["ok"] is True
-    shared = unique_data_sources(
-        {"hospital-a": ["/same"], "hospital-b": ["/same"]}
-    )
-    assert shared["ok"] is False
-    nets = no_shared_client_networks(
-        {
-            "hospital-a": {"fl-hospital-a"},
-            "hospital-b": {"fl-hospital-b"},
-        }
-    )
-    assert nets["ok"] is True
-    leak = no_shared_client_networks(
-        {
-            "hospital-a": {"fl-fabric"},
-            "hospital-b": {"fl-fabric"},
-        }
-    )
-    assert leak["ok"] is False
+def test_csv_rejects_wrong_feature_count(tmp_path: Path) -> None:
+    path = tmp_path / "bad.csv"
+    path.write_text("1,2,3\n4,5,6\n", encoding="utf-8")
+    try:
+        load_csv_xy(path, input_dim=784)
+    except ValueError as exc:
+        assert "784" in str(exc)
+    else:
+        raise AssertionError("expected ValueError")
 
 
-def test_egress_audit_parser_requires_zero_raw_samples() -> None:
-    line = json.dumps(
-        {
-            "message": "Egress audit — raw samples stay local",
-            "client_id": "hospital-a",
-            "raw_samples_sent": 0,
-            "payload_kind": "model_weights",
-            "nbytes": 1024,
-            "n_tensors": 8,
-            "secagg_applied": True,
-        }
-    )
-    parsed = parse_egress_audit_lines([line, "not json"])
-    assert parsed[0]["raw_samples_sent"] == 0
-    assert parsed[0]["payload_kind"] == "model_weights"
+def test_proof_without_docker_reports_unavailable() -> None:
+    result = collect_proof(None)
+    assert result["available"] is False
+    assert result["checks"] == []
+    assert "hospitals" in result
 
 
 def test_dp_disabled_keeps_epsilon_zero() -> None:

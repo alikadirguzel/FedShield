@@ -65,6 +65,8 @@ PAGE = r"""
           <input type="file" name="file" accept=".csv,text/csv" required/>
           <button class="go" type="submit">Bu hastaneye yükle</button>
         </form>
+        <p><a href="/api/sample/{{ h.id }}" style="color:var(--acc)">Örnek CSV indir</a>
+           <span class="muted">(784 özellik + etiket — rastgele Excel yüklemeyin)</span></p>
         <p class="muted status"></p>
       </article>
       {% endfor %}
@@ -112,10 +114,14 @@ PAGE = r"""
       const status = form.parentElement.querySelector(".status");
       const body = new FormData(form);
       status.textContent = "Yükleniyor…";
-      const res = await fetch("/api/upload/" + hid, { method: "POST", body });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) { status.textContent = "Hata: " + (data.message || res.status); return; }
-      status.textContent = "Yazıldı (" + data.data.n_samples + " satır, hash " + data.data.sha256 + "). Client yeniden başlatıldı: " + data.restarted;
+      try {
+        const res = await fetch("/api/upload/" + hid, { method: "POST", body });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) { status.textContent = "Hata: " + (data.message || res.status); return; }
+        status.textContent = "Yazıldı (" + data.data.n_samples + " satır, hash " + data.data.sha256 + "). Client yeniden başlatıldı: " + data.restarted;
+      } catch (err) {
+        status.textContent = "Konsola ulaşılamadı. Docker Desktop'ı açın, sonra .\\dev.ps1 start";
+      }
     });
   });
   document.getElementById("run-proof").addEventListener("click", async () => {

@@ -5,9 +5,9 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from flask import Flask, abort, jsonify, render_template_string, request
+from flask import Flask, abort, jsonify, render_template_string, request, Response
 
-from src.common.data_ingest import load_csv_xy, summarize_partition, write_partition
+from src.common.data_ingest import load_csv_xy, partition_to_csv, summarize_partition, write_partition
 from src.common.tenants import hospital_ids, load_hospitals
 from src.console.isolation import collect_proof, restart_hospital
 from src.console.templates import PAGE
@@ -71,7 +71,7 @@ def api_upload(hospital_id: str):
     try:
         features, labels = load_csv_xy(tmp, INPUT_DIM)
         write_partition(dest, features, labels)
-    except ValueError as exc:
+    except Exception as exc:  # noqa: BLE001
         return jsonify({"ok": False, "message": str(exc)}), 400
     finally:
         if tmp.exists():
@@ -91,6 +91,20 @@ def api_upload(hospital_id: str):
             "restarted": restarted,
             "data": summarize_partition(dest, NUM_CLASSES),
         }
+    )
+
+
+@app.get("/api/sample/<hospital_id>")
+def api_sample(hospital_id: str):
+    dest = _dir(hospital_id)
+    try:
+        body = partition_to_csv(dest)
+    except FileNotFoundError as exc:
+        return jsonify({"ok": False, "message": str(exc)}), 404
+    return Response(
+        body,
+        mimetype="text/csv",
+        headers={"Content-Disposition": f"attachment; filename={hospital_id}.csv"},
     )
 
 
