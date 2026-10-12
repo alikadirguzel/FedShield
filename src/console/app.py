@@ -69,7 +69,7 @@ def api_upload(hospital_id: str):
     tmp = dest / "_upload.csv"
     upload.save(tmp)
     try:
-        features, labels = load_csv_xy(tmp, INPUT_DIM)
+        features, labels = load_csv_xy(tmp, INPUT_DIM, num_classes=NUM_CLASSES)
         write_partition(dest, features, labels)
     except Exception as exc:  # noqa: BLE001
         return jsonify({"ok": False, "message": str(exc)}), 400

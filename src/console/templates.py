@@ -58,6 +58,9 @@ PAGE = r"""
         {% if h.data.present %}
           <p>Kayıt: <strong>{{ h.data.n_samples }}</strong> · özellik {{ h.data.n_features }} · hash <code>{{ h.data.sha256 }}</code></p>
           <p class="muted">Sınıf histogramı: {{ h.data.class_hist }}</p>
+          {% if h.data.out_of_range %}
+          <p class="bad">Aralık dışı veya geçersiz etiket: {{ h.data.out_of_range }} kayıt histogramda yok.</p>
+          {% endif %}
         {% else %}
           <p class="bad">Bu hastanede henüz partition yok.</p>
         {% endif %}

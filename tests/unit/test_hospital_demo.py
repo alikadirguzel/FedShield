@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 import numpy as np
+import pytest
 import torch
 from torch.utils.data import DataLoader, TensorDataset
 
@@ -60,6 +61,46 @@ def test_csv_ingest_and_summary_hides_rows(tmp_path: Path) -> None:
     assert "sha256" in summary
     dumped = json.dumps(summary)
     assert "0.123" not in dumped
+
+
+def test_csv_rejects_fractional_labels(tmp_path: Path) -> None:
+    path = tmp_path / "frac.csv"
+    path.write_text("1,2,1.9\n3,4,0\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="tam sayı"):
+        load_csv_xy(path, input_dim=2)
+
+
+def test_csv_rejects_negative_and_out_of_range_labels(tmp_path: Path) -> None:
+    negative = tmp_path / "neg.csv"
+    negative.write_text("1,2,-1\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="negatif"):
+        load_csv_xy(negative, input_dim=2)
+
+    high = tmp_path / "high.csv"
+    high.write_text("1,2,10\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="0-9"):
+        load_csv_xy(high, input_dim=2, num_classes=10)
+
+
+def test_csv_accepts_integer_valued_float_labels(tmp_path: Path) -> None:
+    path = tmp_path / "ok.csv"
+    path.write_text("1,2,1.0\n3,4,0\n", encoding="utf-8")
+    _, labels = load_csv_xy(path, input_dim=2, num_classes=10)
+    assert labels.tolist() == [1, 0]
+
+
+def test_summary_survives_out_of_range_labels(tmp_path: Path) -> None:
+    dest = tmp_path / "hospital-a"
+    write_partition(
+        dest,
+        np.ones((3, 2), dtype=np.float32),
+        np.array([0, -1, 10**9], dtype=np.int64),
+    )
+    summary = summarize_partition(dest, num_classes=10)
+    assert summary["n_samples"] == 3
+    assert summary["class_hist"] == [1, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+    assert summary["out_of_range"] == 2
+    assert "1000000000" not in json.dumps(summary["class_hist"])
 
 
 def test_csv_rejects_wrong_feature_count(tmp_path: Path) -> None:
